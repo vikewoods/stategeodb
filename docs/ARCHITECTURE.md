@@ -171,6 +171,10 @@ replace the stable artifact.
 
 The Phase 0 command shell exposes all five commands and their help. Their domain
 operations remain explicitly unavailable until their implementation phases.
+The current shell uses process status `0` for success and `1` for every failure;
+stderr diagnostics distinguish invalid usage, unavailable commands, and output
+failures. This binary status model is a foundation-stage contract, not a promise
+about the taxonomy needed after real automation behavior is implemented.
 
 ## 7. Internal component boundaries
 

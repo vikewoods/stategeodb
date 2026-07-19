@@ -9,7 +9,6 @@ import (
 const (
 	exitSuccess = 0
 	exitFailure = 1
-	exitUsage   = 2
 
 	helpText = `stategeodb is an offline geolocation database compiler.
 
@@ -116,12 +115,12 @@ func Run(
 	switch args[0] {
 	case "--help", "-h":
 		if len(args) != 1 {
-			return writeUsageFailure(stderr)
+			return writeInvalidUsage(stderr)
 		}
 		return writeResult(stdout, stderr, helpText)
 	case "--version":
 		if len(args) != 1 {
-			return writeUsageFailure(stderr)
+			return writeInvalidUsage(stderr)
 		}
 		return writeResult(stdout, stderr, "stategeodb "+version+"\n")
 	case "help":
@@ -130,7 +129,7 @@ func Run(
 
 	cmd, ok := findCommand(args[0])
 	if !ok {
-		return writeUsageFailure(stderr)
+		return writeInvalidUsage(stderr)
 	}
 	if len(args) == 1 {
 		return writeUnavailable(stderr, cmd.name)
@@ -138,7 +137,7 @@ func Run(
 	if len(args) == 2 && isHelpFlag(args[1]) {
 		return writeResult(stdout, stderr, cmd.help)
 	}
-	return writeUsageFailure(stderr)
+	return writeInvalidUsage(stderr)
 }
 
 func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -146,12 +145,12 @@ func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
 		return writeResult(stdout, stderr, helpText)
 	}
 	if len(args) != 1 {
-		return writeUsageFailure(stderr)
+		return writeInvalidUsage(stderr)
 	}
 
 	cmd, ok := findCommand(args[0])
 	if !ok {
-		return writeUsageFailure(stderr)
+		return writeInvalidUsage(stderr)
 	}
 	return writeResult(stdout, stderr, cmd.help)
 }
@@ -193,9 +192,9 @@ func writeUnavailable(stderr io.Writer, name string) int {
 	return exitFailure
 }
 
-func writeUsageFailure(stderr io.Writer) int {
+func writeInvalidUsage(stderr io.Writer) int {
 	writeDiagnostic(stderr, unknownArgumentText)
-	return exitUsage
+	return exitFailure
 }
 
 func writeDiagnostic(stderr io.Writer, diagnostic string) {

@@ -31,9 +31,12 @@ order. Each command supports `stategeodb help <command>`,
 
 Help and version results are written to stdout. Invoking a recognized domain
 command returns exit code `1` with a fixed unavailable diagnostic on stderr.
-Invalid flags, arguments, or command names return exit code `2`. Domain
-operations, configuration, JSON output, MMDB processing, and publication are
-not implemented in the current build.
+Invalid flags, arguments, command names, and output failures also return exit
+code `1`. The current CLI therefore uses `0` for success and `1` for failure;
+stderr diagnostics, rather than process-status subcategories, distinguish
+failure causes. This binary model may be revised after real automation
+requirements exist. Domain operations, configuration, JSON output, MMDB
+processing, and publication are not implemented in the current build.
 
 ## Why this exists
 

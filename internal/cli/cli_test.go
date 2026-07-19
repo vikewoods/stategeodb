@@ -234,8 +234,8 @@ func TestRun_RejectsInvalidUsage(t *testing.T) {
 			t.Parallel()
 
 			status, stdout, stderr := runCLI(t, test.args, "ignored")
-			if status != exitUsage {
-				t.Errorf("Run() status = %d, want %d", status, exitUsage)
+			if status != exitFailure {
+				t.Errorf("Run() status = %d, want %d", status, exitFailure)
 			}
 			if stdout != "" {
 				t.Errorf("Run() stdout = %q, want empty", stdout)
@@ -281,7 +281,7 @@ func TestRun_RepeatedInvocationsDoNotLeakState(t *testing.T) {
 			name:           "usage failure",
 			args:           []string{"unknown"},
 			version:        "ignored",
-			expectedStatus: exitUsage,
+			expectedStatus: exitFailure,
 			expectedStderr: unknownArgumentText,
 		},
 		{
@@ -356,7 +356,7 @@ func TestRun_DiagnosticWriteFailureRetainsStatus(t *testing.T) {
 		args           []string
 		expectedStatus int
 	}{
-		{name: "usage failure", args: []string{"unknown"}, expectedStatus: exitUsage},
+		{name: "usage failure", args: []string{"unknown"}, expectedStatus: exitFailure},
 		{name: "unavailable command", args: []string{"build"}, expectedStatus: exitFailure},
 	}
 
