@@ -182,9 +182,12 @@ The package names below describe responsibilities rather than a frozen layout.
 
 ### Configuration
 
-Parses and validates file, environment, and flag inputs into one immutable
-runtime configuration. Configuration validation completes before source
-acquisition or output creation.
+This planned boundary will parse and validate file, environment, and flag inputs
+into one immutable runtime configuration. Concrete parsing begins only when
+Phase 1 defines real source-ingestion fields; the foundation intentionally has
+no empty configuration type, precedence machinery, or format dependency.
+Configuration validation must complete before source acquisition or output
+creation once implemented.
 
 ### Source acquisition
 
@@ -252,9 +255,12 @@ metadata and schema, executes behavioral fixtures, and evaluates change gates.
 
 ### Reporter
 
-Produces human-readable or JSON evidence for a build. Reports describe inputs,
-configuration fingerprints, source versions, coverage, disagreements,
-overrides, output metadata, checksums, gate results, and publication outcome.
+This planned boundary will produce human-readable or JSON evidence for commands
+with real structured results. JSON schemas begin with bounded inspection,
+verification, or build reporting rather than a generic foundation envelope.
+Reports will describe inputs, configuration fingerprints, source versions,
+coverage, disagreements, overrides, output metadata, checksums, gate results,
+and publication outcome.
 
 ### Publisher
 
@@ -493,6 +499,12 @@ source identity, overrides, compiler version, or merge configuration changes.
 
 No scheduler failure should make the existing runtime lookup depend on the
 scheduler recovering immediately.
+
+The foundation runner already receives a signal-aware context, but immediate
+help and version output does not fail merely because that context is cancelled.
+Operation-level cancellation and internal typed domain errors begin with the
+first blocking domain behavior. Those operations must propagate cancellation
+and preserve the published artifact.
 
 ## 17. Security, privacy, and licensing
 

@@ -2,16 +2,19 @@
 docs/PHASES.md
 docs/phases/
 
-# Local build and generated data
+# Local build output and generated data
 /bin/
 /dist/
 /tmp/
 /work/
+/downloads/
+/sources/
 *.mmdb
 *.mmdb.json
+*.mmdb.gz
 *.sha256
-!testdata/*.mmdb
-!testdata/**/*.mmdb
+GeoIP2-*.tar.gz
+GeoLite2-*.tar.gz
 
 # Local configuration and credentials
 .env

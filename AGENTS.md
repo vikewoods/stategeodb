@@ -68,13 +68,18 @@ diverging.
 
 - Commands must be non-interactive and safe for CronJobs and shell pipelines.
 - Machine-readable results go to stdout. Logs and diagnostics go to stderr.
-- Support an explicit JSON output mode for reports and inspection.
+- Add explicit JSON output when report-producing or inspection commands have
+  real structured results; current help and version output remains text-only.
 - Invalid flags or configuration are usage failures; corrupt inputs,
-  verification failures, and publication failures are distinguishable errors.
+  verification failures, and publication failures are distinguishable through
+  diagnostics and, when domain behavior exists, internal error classification.
+- The current process-status contract is binary: `0` for success and `1` for
+  failure. Change it only for a concrete automation requirement.
 - Do not call `os.Exit` below `main`; return errors so deferred cleanup runs.
 - Do not print credentials, authenticated URLs, source archives, or client IP
   samples in normal logs.
-- Cancellation must leave the current published MMDB unchanged.
+- Blocking operations must honor caller cancellation when introduced, and
+  cancellation must leave the current published MMDB unchanged.
 
 ## Data and merge invariants
 
@@ -108,18 +113,30 @@ diverging.
 
 ## Verification
 
-Run validation proportional to the change. Once the Go module exists, the
-normal baseline is:
+Run validation proportional to the change. When Make is available, `make check`
+is the preferred convenience entry point. It must validate without formatting
+or otherwise rewriting tracked source. The underlying authoritative baseline
+remains visible and directly runnable:
 
 ```text
-gofmt on changed Go files
-go test ./...
-go test -race ./...
+find . -type f -name '*.go' -exec gofmt -l {} +
+go mod tidy -diff
+go list -m all
+go test -count=1 ./...
+go test -race -count=1 ./...
 go vet ./...
+if [ -L bin ] || [ -L bin/stategeodb ]; then
+  printf '%s\n' 'refusing to build through a symlink' >&2
+  false
+else
+  mkdir -p bin
+  go build -o bin/stategeodb ./cmd/stategeodb
+fi
 ```
 
-Also run focused tests, fuzz targets, integration fixtures, or benchmarks when
-the phase changes prefix traversal, merging, MMDB encoding, filesystem
+Use `make fmt` or `gofmt -w` as an explicit editing step, never as an acceptance
+check. Also run focused tests, fuzz targets, integration fixtures, or benchmarks
+when the phase changes prefix traversal, merging, MMDB encoding, filesystem
 publication, concurrency, or memory use.
 
 Every completed phase must provide evidence for its success criteria. Report:

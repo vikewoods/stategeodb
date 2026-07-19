@@ -38,6 +38,43 @@ failure causes. This binary model may be revised after real automation
 requirements exist. Domain operations, configuration, JSON output, MMDB
 processing, and publication are not implemented in the current build.
 
+## Development
+
+Development requires Go 1.26 or newer within the Go 1 compatibility promise.
+On macOS and Linux systems with Make available, run the complete local
+foundation validation with:
+
+```text
+make check
+```
+
+`make build` writes the executable to `bin/stategeodb`. The `bin/` directory is
+ignored by Git. The Makefile is a POSIX-oriented convenience; developers
+without Make can run the authoritative commands directly:
+
+```text
+find . -type f -name '*.go' -exec gofmt -l {} +
+go mod tidy -diff
+go list -m all
+go test -count=1 ./...
+go test -race -count=1 ./...
+go vet ./...
+if [ -L bin ] || [ -L bin/stategeodb ]; then
+  printf '%s\n' 'refusing to build through a symlink' >&2
+  false
+else
+  mkdir -p bin
+  go build -o bin/stategeodb ./cmd/stategeodb
+fi
+```
+
+The current CLI keeps help, version, invalid-usage, and unavailable-command
+output text-only. Concrete configuration begins with real Phase 1 source
+fields; JSON schemas begin with structured report or inspection results;
+internal typed errors begin with domain failure modes; and operation-level
+cancellation tests begin with the first blocking command. All five domain
+operations remain unavailable in this foundation build.
+
 ## Why this exists
 
 City databases contain substantially more information than the middleware
