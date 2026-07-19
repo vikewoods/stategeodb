@@ -38,6 +38,11 @@ failure causes. This binary model may be revised after real automation
 requirements exist. Domain operations, configuration, JSON output, MMDB
 processing, and publication are not implemented in the current build.
 
+The internal source-neutral normalization layer now validates canonical IPv4,
+IPv6, and mapped-IPv4 prefixes, country and first-subdivision codes, and stable
+logical source IDs. It does not open or decode MMDB files, and it is not wired
+to any CLI command.
+
 ## Development
 
 Development requires Go 1.26 or newer within the Go 1 compatibility promise.

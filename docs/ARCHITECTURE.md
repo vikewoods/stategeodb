@@ -209,22 +209,42 @@ type SourceRecord struct {
     Prefix      netip.Prefix
     Country     string
     Subdivision string
-    Source      string
+    SourceID    string
 }
 ```
 
-The actual type may carry input position and provenance for diagnostics, but it
-must not carry middleware allow/deny policy.
+The implemented source-neutral record is an ordinary copyable Go value. Its
+source ID is a non-empty logical identifier such as `primary` or
+`maxmind-city`, never an inferred filesystem path. Source IDs preserve case and
+use an ASCII token: they begin and end with a letter or digit and may contain
+letters, digits, hyphens, underscores, or periods. Paths, URLs, Unicode,
+whitespace, and control characters are invalid.
+
+An empty country and subdivision represent a known source network whose
+required location is unknown. A subdivision without a country is invalid. The
+record contains geographic facts only and must not carry middleware allow/deny
+policy, credentials, authenticated URLs, filesystem paths, or complete provider
+metadata.
 
 ### Normalizer
 
 Canonicalizes addresses and ISO-style codes:
 
-- unmaps IPv4-in-IPv6 addresses where appropriate;
-- masks prefixes;
-- uppercases and validates country and subdivision codes;
+- rejects invalid prefixes and masks native IPv4 and IPv6 prefixes;
+- converts an IPv4-mapped IPv6 prefix contained by `::ffff:0:0/96` to native
+  IPv4, subtracting 96 from its prefix length;
+- rejects shorter mapped prefixes that also describe non-mapped IPv6 space;
+- accepts an empty country as unknown, otherwise requiring exactly two ASCII
+  letters and normalizing lowercase to uppercase;
+- accepts an empty first subdivision as unknown, otherwise requiring one to
+  three ASCII letters or digits and normalizing lowercase to uppercase;
 - represents absent values explicitly;
-- rejects invalid prefixes and unsupported field types.
+- does not maintain country or subdivision membership tables.
+
+Normalized records have one deterministic total order: IPv4 before IPv6,
+network address ascending, prefix length ascending for the same address, source
+ID ascending, country ascending, then subdivision ascending. Ordering does not
+deduplicate records and cannot depend on input or map iteration order.
 
 ### Comparison and merge engine
 
