@@ -16,8 +16,12 @@ import (
 )
 
 const (
-	databaseType        = "StateGeo-Country-Subdivision"
-	databaseDescription = "stategeodb country/subdivision schema v1"
+	// DatabaseType identifies the runtime record shape. Incompatible runtime
+	// record changes require a new database type.
+	DatabaseType = "StateGeo-Country-Subdivision"
+	// SchemaDescription identifies compatible revisions of DatabaseType.
+	// Compatible schema changes retain DatabaseType and increment this version.
+	SchemaDescription = "stategeodb country/subdivision schema v1"
 )
 
 var (
@@ -74,8 +78,8 @@ func Write(destination io.Writer, records []source.Record, options Options) (int
 
 	tree, err := mmdbwriter.New(mmdbwriter.Options{
 		BuildEpoch:              options.BuildEpoch,
-		DatabaseType:            databaseType,
-		Description:             map[string]string{"en": databaseDescription},
+		DatabaseType:            DatabaseType,
+		Description:             map[string]string{"en": SchemaDescription},
 		DisableIPv4Aliasing:     false,
 		IncludeReservedNetworks: true,
 		IPVersion:               6,

@@ -39,10 +39,10 @@ func TestWriteCompatibility(t *testing.T) {
 		t.Fatalf("Verify() error = %v", err)
 	}
 	metadata := database.Metadata
-	if metadata.DatabaseType != databaseType {
-		t.Errorf("DatabaseType = %q, want %q", metadata.DatabaseType, databaseType)
+	if metadata.DatabaseType != DatabaseType {
+		t.Errorf("DatabaseType = %q, want %q", metadata.DatabaseType, DatabaseType)
 	}
-	expectedDescription := map[string]string{"en": databaseDescription}
+	expectedDescription := map[string]string{"en": SchemaDescription}
 	if !reflect.DeepEqual(metadata.Description, expectedDescription) {
 		t.Errorf("Description = %#v, want %#v", metadata.Description, expectedDescription)
 	}
