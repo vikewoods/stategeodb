@@ -1,0 +1,144 @@
+# Repository guidance
+
+## Mission
+
+Build `stategeodb` as a deterministic, automation-first Go CLI that compiles
+licensed geolocation sources into a minimal MMDB for local use by
+`traefik-plugin-state-geo`.
+
+The CLI is an offline build tool. It is not a request-time service and must not
+introduce a network, SQL, document-database, cache-server, or CDN dependency
+into Traefik's request path.
+
+## Read before changing code
+
+1. Read `README.md` for project boundaries and the planned command surface.
+2. Read `docs/ARCHITECTURE.md` for component ownership and durable decisions.
+3. When present, read the active phase in `docs/PHASES.md` and only its matching
+   prompt under `docs/phases/`. Both paths are intentionally ignored by Git.
+4. Inspect the current code and tests before selecting packages or changing an
+   interface.
+
+If a phase file conflicts with committed architecture or a newer user request,
+follow the newer user request and update the local plan rather than silently
+diverging.
+
+## Authorization boundaries
+
+- For review, explanation, diagnosis, or planning requests, inspect relevant
+  files and report findings. Do not implement changes unless requested.
+- For build, change, or fix requests, make the requested in-repository edits and
+  run relevant non-destructive validation without pausing for routine approval.
+- Require explicit confirmation before publishing images or releases, pushing
+  Git changes, deploying to a cluster, writing to another repository, deleting
+  material data, rotating credentials, or materially expanding the phase.
+- Never download or redistribute licensed production data unless the task
+  explicitly authorizes that source and use.
+
+## Project boundaries
+
+- Keep the compiler in this repository and the Traefik middleware in its own
+  repository. Do not copy writer or CLI dependencies into the Yaegi plugin.
+- Keep live Kubernetes resources in their cluster repositories. This repository
+  may contain reviewed reference manifests, schemas, and examples only.
+- Keep geographic data separate from access-control policy. Location
+  corrections may change country or subdivision facts; allow/deny rules belong
+  to middleware or cluster policy.
+- Keep generated databases, credentials, source archives, build workspaces, and
+  private phase documents out of Git.
+
+## Go and CLI conventions
+
+- Use the Go version declared by `go.mod` once the module is initialized.
+- Keep `main` minimal. Command handlers parse input and delegate to internal
+  packages; domain logic must remain independently testable.
+- Prefer `net/netip` for IPv4, IPv6, prefixes, and address normalization.
+- Pass `context.Context` through acquisition, compilation, verification, and
+  publication operations that can block or be cancelled.
+- Use explicit constructors and narrow interfaces at source, compiler, writer,
+  verifier, and publisher boundaries.
+- Prefer the standard library. Add a production dependency only when it has a
+  clear ownership, maintenance, security, or correctness advantage.
+- Use the upstream MMDB reader and MaxMind writer only in this compiled tool;
+  do not modify or reuse the Traefik plugin's Yaegi compatibility shim.
+- Avoid package globals for mutable build state. A command invocation must own
+  its configuration, inputs, temporary files, and result.
+
+### Command behavior
+
+- Commands must be non-interactive and safe for CronJobs and shell pipelines.
+- Machine-readable results go to stdout. Logs and diagnostics go to stderr.
+- Support an explicit JSON output mode for reports and inspection.
+- Invalid flags or configuration are usage failures; corrupt inputs,
+  verification failures, and publication failures are distinguishable errors.
+- Do not call `os.Exit` below `main`; return errors so deferred cleanup runs.
+- Do not print credentials, authenticated URLs, source archives, or client IP
+  samples in normal logs.
+- Cancellation must leave the current published MMDB unchanged.
+
+## Data and merge invariants
+
+- IPv4 and IPv6 behavior must be covered by the same feature and test work.
+- Normalize output to `country.iso_code` and optional
+  `subdivisions[0].iso_code` unless architecture is deliberately revised.
+- Identical inputs, configuration, overrides, and injected build time must
+  produce byte-identical output.
+- Primary values win conflicts by default. A secondary source may fill missing
+  data only according to the configured merge policy.
+- Provider disagreement is evidence of uncertainty, not proof that either
+  provider is correct.
+- Longest prefix wins for location overrides. Duplicate conflicting prefixes
+  are build errors.
+- Apply overrides after provider merging and record their provenance in the
+  build report.
+- Never replace the published artifact until the complete candidate passes all
+  configured structural and behavioral gates.
+
+## Filesystem and publication safety
+
+- Create candidates in temporary paths on the same filesystem as the final
+  destination when an atomic rename is required.
+- Reopen and verify the completed candidate before publication.
+- Preserve the existing artifact on download, decode, compile, verification,
+  checksum, manifest, or rename failure.
+- Avoid unresolved globs and broad recursive operations for cleanup. Delete
+  only validated per-run temporary paths.
+- Tests must use temporary directories and synthetic or license-compatible
+  fixtures, never a production MMDB.
+
+## Verification
+
+Run validation proportional to the change. Once the Go module exists, the
+normal baseline is:
+
+```text
+gofmt on changed Go files
+go test ./...
+go test -race ./...
+go vet ./...
+```
+
+Also run focused tests, fuzz targets, integration fixtures, or benchmarks when
+the phase changes prefix traversal, merging, MMDB encoding, filesystem
+publication, concurrency, or memory use.
+
+Every completed phase must provide evidence for its success criteria. Report:
+
+- the behavior implemented;
+- files and public interfaces changed;
+- exact validation commands and results;
+- benchmark or artifact-size changes when relevant;
+- unresolved risks and the next safe phase.
+
+Do not claim equivalence, determinism, atomicity, or memory improvement without
+a test or measurement supporting the claim.
+
+## Documentation and Git
+
+- Keep `README.md` and `docs/ARCHITECTURE.md` aligned with implemented behavior.
+- Document material design decisions where they are made; do not leave the only
+  explanation in a phase prompt.
+- Do not commit `docs/PHASES.md`, `docs/phases/`, MMDB files, credentials, build
+  reports containing source data, or local work directories.
+- Preserve user changes and unrelated worktree state. Do not stage, commit,
+  tag, push, or create releases unless explicitly requested.

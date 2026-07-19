@@ -1,0 +1,33 @@
+# Private planning and execution prompts
+docs/PHASES.md
+docs/phases/
+
+# Local build and generated data
+/bin/
+/dist/
+/tmp/
+/work/
+*.mmdb
+*.mmdb.json
+*.sha256
+!testdata/*.mmdb
+!testdata/**/*.mmdb
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+GeoIP.conf
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go tooling output
+coverage.out
+coverage.html
+*.test
+*.prof
