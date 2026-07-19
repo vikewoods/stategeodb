@@ -1,7 +1,7 @@
-// Package maxmind opens and verifies supported MaxMind City databases.
+// Package maxmind opens, verifies, and ingests supported MaxMind City databases.
 //
 // This package owns the lifetime of the upstream reader. It intentionally does
-// not expose lookup, traversal, or record-decoding operations yet.
+// not expose the upstream reader, iterator, lookup, or provider record types.
 package maxmind
 
 import (
@@ -21,6 +21,8 @@ var (
 	ErrCorrupt     = errors.New("maxmind: corrupt source database")
 	ErrUnsupported = errors.New("maxmind: unsupported source database")
 	ErrClose       = errors.New("maxmind: source database close failure")
+	ErrUnavailable = errors.New("maxmind: source database unavailable")
+	ErrIngest      = errors.New("maxmind: source record traversal or decoding failure")
 )
 
 // Metadata is an application-owned snapshot of source database metadata.
@@ -49,8 +51,8 @@ type Metadata struct {
 // Database owns one verified upstream reader. Database values must not be
 // copied after use; Open returns a pointer for that reason.
 //
-// Close must not run concurrently with itself or with future reader operations.
-// Metadata is an independent snapshot and remains available after Close.
+// Close must not run concurrently with itself or with Records. Metadata is an
+// independent snapshot and remains available after Close.
 type Database struct {
 	noCopy noCopy
 

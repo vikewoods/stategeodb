@@ -154,13 +154,20 @@ a test or measurement supporting the claim.
 
 - Invoke every applicable installed Go skill before making or reviewing Go
   implementation decisions.
-- Use these exact Go subagents for each implementation phase when they are
+- For implementation phases, the primary agent must inspect and design the
+  change, implement all code and tests itself, and run focused and repository
+  validation before invoking the final read-only review batch.
+- Use these exact Go subagents once as the final review batch when they are
   present: `go_reviewer` for correctness and compatibility, `go_concurrency`
   for lifecycle and synchronization, `go_security` for trust boundaries, and
-  `go_performance` for measured efficiency. They are read-only; the primary
-  agent owns all implementation edits and consolidation. Give each agent a
-  distinct task aligned with its configured specialty. An agent may report no
-  actionable findings. Do not invent replacement agents or fabricate tool use.
+  `go_performance` for measured efficiency. Give each agent a distinct task
+  aligned with its configured specialty. An agent may report no actionable
+  findings. Do not substitute, rename, invent, or repeatedly spawn the full
+  group.
+- The primary agent owns all implementation edits and consolidation. If a final
+  reviewer finds an actionable issue, the primary agent makes the correction,
+  reruns affected tests and validation, and may rerun only the reviewer whose
+  material finding requires confirmation, at most once.
 - Consult Context7 for current, version-sensitive, or unfamiliar Go and
   dependency APIs, and prefer primary or upstream documentation.
 - Report the skills, subagents, and Context7 documentation actually used when a
@@ -170,10 +177,30 @@ a test or measurement supporting the claim.
 
 ## Documentation and Git
 
-- Keep `README.md` and `docs/ARCHITECTURE.md` aligned with implemented behavior.
-- Document material design decisions where they are made; do not leave the only
-  explanation in a phase prompt.
+- Do not update `README.md` or `docs/ARCHITECTURE.md` during ordinary
+  implementation phases. Change them only when the user explicitly requests
+  documentation work.
+- Record phase status, implementation evidence, temporary restrictions,
+  dependency notes, and next steps in ignored local phase tracking. Package
+  comments, exported API documentation, tests, and fixture provenance
+  documentation remain allowed.
+- Update `testdata/README.md` only when fixture provenance or licensing changes.
+- Document material design decisions in an allowed durable location; do not
+  leave the only explanation in a phase prompt.
 - Do not commit `docs/PHASES.md`, `docs/phases/`, MMDB files, credentials, build
   reports containing source data, or local work directories.
 - Preserve user changes and unrelated worktree state. Do not stage, commit,
   tag, push, or create releases unless explicitly requested.
+
+## Phase completion reports
+
+- Target at most 1,200 words unless a failure requires additional evidence.
+- Report decisions and evidence, not a chronological work log.
+- Do not paste complete successful test output, complete module graphs, raw
+  coverage output, or exhaustive fixture tables unless directly changed by the
+  phase.
+- Include exact failure output for any required command that fails.
+- Include enough information to reconstruct the public or cross-package API and
+  judge the acceptance criteria.
+- Use exactly these sections: `Result`, `Implementation`, `Tests and validation`,
+  `Final subagent review`, and `Scope, risks, and next phase`.
