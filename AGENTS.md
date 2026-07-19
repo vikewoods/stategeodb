@@ -133,6 +133,21 @@ Every completed phase must provide evidence for its success criteria. Report:
 Do not claim equivalence, determinism, atomicity, or memory improvement without
 a test or measurement supporting the claim.
 
+## Go implementation workflow
+
+- Invoke every applicable installed Go skill before making or reviewing Go
+  implementation decisions.
+- Use the four available Go subagents for each implementation phase when they
+  are present, with distinct, bounded responsibilities. The primary agent owns
+  all edits and consolidation; subagents must not duplicate implementation or
+  concurrently edit shared files.
+- Consult Context7 for current, version-sensitive, or unfamiliar Go and
+  dependency APIs, and prefer primary or upstream documentation.
+- Report the skills, subagents, and Context7 documentation actually used when a
+  phase is completed. Report unavailable tooling honestly.
+- Keep tool use relevant to the active phase and do not materially expand its
+  scope.
+
 ## Documentation and Git
 
 - Keep `README.md` and `docs/ARCHITECTURE.md` aligned with implemented behavior.

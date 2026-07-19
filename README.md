@@ -10,9 +10,24 @@ to perform local in-process MMDB lookups and never depends on a remote API,
 SQL database, document database, or a specific CDN.
 
 > [!IMPORTANT]
-> The repository is currently in its architecture and planning stage. The
-> commands described below are the intended interface and are not implemented
-> yet.
+> The root CLI foundation currently supports help and version output only. The
+> domain commands described below are the intended interface and are not
+> implemented yet.
+
+## Current CLI foundation
+
+The implemented root command accepts exactly these forms:
+
+```text
+stategeodb
+stategeodb --help
+stategeodb -h
+stategeodb help
+stategeodb --version
+```
+
+Help and version results are written to stdout. Unknown root arguments are
+usage failures with exit code `2` and diagnostics on stderr.
 
 ## Why this exists
 
