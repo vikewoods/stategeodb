@@ -10,13 +10,12 @@ to perform local in-process MMDB lookups and never depends on a remote API,
 SQL database, document database, or a specific CDN.
 
 > [!IMPORTANT]
-> The root CLI foundation currently supports help and version output only. The
-> domain commands described below are the intended interface and are not
-> implemented yet.
+> The CLI currently exposes the planned domain commands for help and automation
+> discovery, but their domain operations are not implemented yet.
 
 ## Current CLI foundation
 
-The implemented root command accepts exactly these forms:
+The implemented root command accepts these forms:
 
 ```text
 stategeodb
@@ -26,8 +25,15 @@ stategeodb help
 stategeodb --version
 ```
 
-Help and version results are written to stdout. Unknown root arguments are
-usage failures with exit code `2` and diagnostics on stderr.
+Root help lists `build`, `compare`, `verify`, `inspect`, and `publish` in that
+order. Each command supports `stategeodb help <command>`,
+`stategeodb <command> --help`, and `stategeodb <command> -h`.
+
+Help and version results are written to stdout. Invoking a recognized domain
+command returns exit code `1` with a fixed unavailable diagnostic on stderr.
+Invalid flags, arguments, or command names return exit code `2`. Domain
+operations, configuration, JSON output, MMDB processing, and publication are
+not implemented in the current build.
 
 ## Why this exists
 
@@ -98,7 +104,14 @@ stategeodb build     Compile normalized sources and overrides into an MMDB
 stategeodb compare   Report coverage and disagreement without publishing
 stategeodb verify    Validate source or generated artifacts and quality gates
 stategeodb inspect   Print metadata and selected lookups for diagnostics
+stategeodb publish   Publish an already built and verified candidate artifact
 ```
+
+`build` will create and verify a candidate artifact but will never replace the
+stable published artifact. `publish` is the only command that will perform
+publication. `compare` will not merge or publish, `inspect` will remain bounded
+to metadata and explicitly selected lookups, and `publish` will not compile
+sources.
 
 All commands will follow normal Unix automation conventions:
 
@@ -132,12 +145,13 @@ The intended Kubernetes pattern is one builder CronJob per cluster:
 
 1. The official MaxMind updater downloads or checks the current source.
 2. Optional source adapters acquire their databases.
-3. `stategeodb` verifies inputs and compiles a candidate in temporary storage.
+3. `stategeodb build` verifies inputs and compiles a candidate in temporary
+   storage.
 4. The candidate is reopened, structurally verified, and compared with the
    current artifact.
 5. The build emits a checksum, provenance manifest, and comparison report.
-6. The candidate replaces the stable MMDB path using an atomic same-filesystem
-   rename.
+6. A separate `stategeodb publish` invocation replaces the stable MMDB path
+   using an atomic same-filesystem rename.
 7. Traefik detects the new file and swaps to the validated reader.
 
 Individual Traefik pods must not independently download or compile databases.

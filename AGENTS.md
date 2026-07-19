@@ -137,10 +137,13 @@ a test or measurement supporting the claim.
 
 - Invoke every applicable installed Go skill before making or reviewing Go
   implementation decisions.
-- Use the four available Go subagents for each implementation phase when they
-  are present, with distinct, bounded responsibilities. The primary agent owns
-  all edits and consolidation; subagents must not duplicate implementation or
-  concurrently edit shared files.
+- Use these exact Go subagents for each implementation phase when they are
+  present: `go_reviewer` for correctness and compatibility, `go_concurrency`
+  for lifecycle and synchronization, `go_security` for trust boundaries, and
+  `go_performance` for measured efficiency. They are read-only; the primary
+  agent owns all implementation edits and consolidation. Give each agent a
+  distinct task aligned with its configured specialty. An agent may report no
+  actionable findings. Do not invent replacement agents or fabricate tool use.
 - Consult Context7 for current, version-sensitive, or unfamiliar Go and
   dependency APIs, and prefer primary or upstream documentation.
 - Report the skills, subagents, and Context7 documentation actually used when a

@@ -137,17 +137,14 @@ stategeodb build
 stategeodb compare
 stategeodb verify
 stategeodb inspect
+stategeodb publish
 ```
 
 ### `build`
 
-Loads configured inputs, applies the selected merge policy and location
-overrides, writes a candidate minimal MMDB, validates it, and optionally invokes
-the publication boundary.
-
-The default must be safe: writing an explicit candidate is separate from
-replacing a stable production path unless configuration clearly requests
-publication.
+Loads configured local inputs, applies the selected merge policy and location
+overrides, writes a candidate minimal MMDB, and validates it. It never publishes
+the candidate or replaces the stable artifact.
 
 ### `compare`
 
@@ -164,6 +161,16 @@ manifest, checksum, and configured behavioral gates.
 Prints database metadata and explicitly requested prefix or address records for
 operator diagnostics. It must not enumerate or expose full licensed datasets by
 default.
+
+### `publish`
+
+Publishes an already built and verified candidate through the explicit
+publication boundary. It does not acquire inputs, compile sources, change
+records, or perform an implicit build. `publish` is the only command that may
+replace the stable artifact.
+
+The Phase 0 command shell exposes all five commands and their help. Their domain
+operations remain explicitly unavailable until their implementation phases.
 
 ## 7. Internal component boundaries
 
@@ -372,8 +379,10 @@ sequenceDiagram
     T->>T: Detect and load new stable file
 ```
 
-The current stable artifact is unchanged if any step before the rename fails.
-The candidate workspace is unique to one run and can be cleaned independently.
+`build` owns candidate creation and verification and then stops. Publication
+requires a separate `publish` command invocation. The current stable artifact
+is unchanged if any step before the publisher's rename fails. The candidate
+workspace is unique to one run and can be cleaned independently.
 
 ## 12. Verification and quality gates
 
@@ -424,7 +433,8 @@ byte-identical MMDB, manifest, and JSON report content.
 
 ## 14. Publication and rollback
 
-The publisher receives a verified candidate and explicit destination. It:
+Only the `publish` command invokes the publisher. The publisher receives an
+already built and verified candidate and explicit destination. It:
 
 1. Confirms the candidate and destination are on the intended filesystem.
 2. Writes or moves the candidate to a temporary sibling path.
@@ -596,8 +606,6 @@ The following require phase evidence before selection:
   container;
 - the union-prefix data structure and concurrency model;
 - exact build-report schema and stable exit-code taxonomy;
-- whether publication is part of `build` or an eventual explicit `publish`
-  command;
 - retention representation: versioned files, pointer file, or another bounded
   layout;
 - any consensus, confidence, or multi-provider voting policy;

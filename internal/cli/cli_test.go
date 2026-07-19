@@ -7,7 +7,15 @@ import (
 	"testing"
 )
 
-func TestRun_HelpForms(t *testing.T) {
+var testCommands = []command{
+	{name: "build", help: buildHelp},
+	{name: "compare", help: compareHelp},
+	{name: "verify", help: verifyHelp},
+	{name: "inspect", help: inspectHelp},
+	{name: "publish", help: publishHelp},
+}
+
+func TestRun_RootHelpForms(t *testing.T) {
 	expectedStatus, expectedHelp, expectedStderr := runCLI(t, nil, "ignored")
 	if expectedStatus != exitSuccess {
 		t.Fatalf("Run(nil) status = %d, want %d", expectedStatus, exitSuccess)
@@ -17,13 +25,13 @@ func TestRun_HelpForms(t *testing.T) {
 	}
 
 	stableContent := []string{
-		"stategeodb is the command-line foundation",
+		"stategeodb is an offline geolocation database compiler",
 		"Usage:\n",
 		"stategeodb --help",
 		"stategeodb -h",
 		"stategeodb help",
 		"stategeodb --version",
-		"supports root help and version output only",
+		"Domain operations are not implemented in this build.",
 	}
 	for _, content := range stableContent {
 		if !strings.Contains(expectedHelp, content) {
@@ -31,10 +39,20 @@ func TestRun_HelpForms(t *testing.T) {
 		}
 	}
 
-	for _, command := range []string{"build", "compare", "verify", "inspect", "publish"} {
-		if strings.Contains(expectedHelp, "stategeodb "+command) {
-			t.Errorf("root help advertises unimplemented command %q", command)
+	previousIndex := -1
+	for _, cmd := range testCommands {
+		commandLine := "  " + cmd.name + " "
+		index := strings.Index(expectedHelp, commandLine)
+		if index < 0 {
+			t.Errorf("root help does not list command %q", cmd.name)
 		}
+		if count := strings.Count(expectedHelp, commandLine); count != 1 {
+			t.Errorf("root help lists command %q %d times, want once", cmd.name, count)
+		}
+		if index <= previousIndex {
+			t.Errorf("root help command %q is out of order", cmd.name)
+		}
+		previousIndex = index
 	}
 
 	tests := []struct {
@@ -66,6 +84,106 @@ func TestRun_HelpForms(t *testing.T) {
 	}
 }
 
+func TestRun_CommandHelpForms(t *testing.T) {
+	for _, cmd := range testCommands {
+		t.Run(cmd.name, func(t *testing.T) {
+			t.Parallel()
+
+			forms := [][]string{
+				{"help", cmd.name},
+				{cmd.name, "--help"},
+				{cmd.name, "-h"},
+			}
+			for _, args := range forms {
+				status, stdout, stderr := runCLI(t, args, "ignored")
+				if status != exitSuccess {
+					t.Errorf("Run(%q) status = %d, want %d", args, status, exitSuccess)
+				}
+				if stdout != cmd.help {
+					t.Errorf("Run(%q) stdout = %q, want command help %q", args, stdout, cmd.help)
+				}
+				if stderr != "" {
+					t.Errorf("Run(%q) stderr = %q, want empty", args, stderr)
+				}
+			}
+
+			if !strings.Contains(cmd.help, "not implemented in this build") {
+				t.Errorf("%s help does not identify unavailable behavior", cmd.name)
+			}
+		})
+	}
+}
+
+func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		contains []string
+		excludes []string
+	}{
+		{
+			name:     "build",
+			contains: []string{"configured local sources and overrides", "verified candidate artifact", "will not publish or replace"},
+		},
+		{
+			name:     "compare",
+			contains: []string{"coverage and disagreement", "without merging or publishing"},
+		},
+		{
+			name:     "verify",
+			contains: []string{"source or generated artifacts", "configured quality gates"},
+		},
+		{
+			name:     "inspect",
+			contains: []string{"bounded metadata", "explicitly selected lookups", "not dump a complete dataset"},
+		},
+		{
+			name:     "publish",
+			contains: []string{"already built and verified candidate", "explicit publication boundary", "will not compile sources"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd, ok := findCommand(test.name)
+			if !ok {
+				t.Fatalf("findCommand(%q) returned nil", test.name)
+			}
+			for _, content := range test.contains {
+				if !strings.Contains(cmd.help, content) {
+					t.Errorf("%s help does not contain %q", test.name, content)
+				}
+			}
+			for _, content := range test.excludes {
+				if strings.Contains(cmd.help, content) {
+					t.Errorf("%s help unexpectedly contains %q", test.name, content)
+				}
+			}
+		})
+	}
+}
+
+func TestRun_RecognizedCommandsAreUnavailable(t *testing.T) {
+	for _, cmd := range testCommands {
+		t.Run(cmd.name, func(t *testing.T) {
+			t.Parallel()
+
+			status, stdout, stderr := runCLI(t, []string{cmd.name}, "ignored")
+			if status != exitFailure {
+				t.Errorf("Run() status = %d, want %d", status, exitFailure)
+			}
+			if stdout != "" {
+				t.Errorf("Run() stdout = %q, want empty", stdout)
+			}
+			expectedStderr := "stategeodb: " + cmd.name + " is not implemented in this build\n"
+			if stderr != expectedStderr {
+				t.Errorf("Run() stderr = %q, want %q", stderr, expectedStderr)
+			}
+		})
+	}
+}
+
 func TestRun_VersionUsesCallerValue(t *testing.T) {
 	status, stdout, stderr := runCLI(t, []string{"--version"}, "test-version-123")
 
@@ -80,58 +198,35 @@ func TestRun_VersionUsesCallerValue(t *testing.T) {
 	}
 }
 
-func TestRun_RejectsUnknownRootArguments(t *testing.T) {
+func TestRun_RejectsInvalidUsage(t *testing.T) {
 	tests := []struct {
 		name      string
-		arg       string
+		args      []string
 		sensitive bool
 	}{
-		{name: "unknown", arg: "unknown"},
-		{name: "empty argument", arg: ""},
-		{name: "planned command", arg: "build"},
-		{name: "unsupported version alias", arg: "version"},
-		{name: "unsupported short version", arg: "-v"},
-		{name: "unsupported help spelling", arg: "-help"},
-		{name: "flag assignment", arg: "--help=true"},
-		{name: "argument separator", arg: "--"},
-		{name: "token-like value", arg: "--token=top-secret", sensitive: true},
-		{name: "authenticated url", arg: "https://user:secret@example.com/source", sensitive: true},
-		{name: "embedded newline", arg: "unknown\nforged diagnostic", sensitive: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			status, stdout, stderr := runCLI(t, []string{test.arg}, "ignored")
-			if status != exitUsage {
-				t.Errorf("Run() status = %d, want %d", status, exitUsage)
-			}
-			if stdout != "" {
-				t.Errorf("Run() stdout = %q, want empty", stdout)
-			}
-			if stderr != unknownArgumentText {
-				t.Errorf("Run() stderr = %q, want %q", stderr, unknownArgumentText)
-			}
-			if test.sensitive && strings.Contains(stderr, test.arg) {
-				t.Errorf("Run() stderr echoed untrusted argument %q", test.arg)
-			}
-		})
-	}
-}
-
-func TestRun_RejectsMultipleArguments(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{name: "help with extra argument", args: []string{"--help", "extra"}},
-		{name: "short help with extra argument", args: []string{"-h", "extra"}},
-		{name: "help argument with extra argument", args: []string{"help", "extra"}},
-		{name: "version with extra argument", args: []string{"--version", "extra"}},
-		{name: "mixed supported arguments", args: []string{"--help", "--version"}},
+		{name: "unknown command", args: []string{"unknown"}},
+		{name: "empty command", args: []string{""}},
+		{name: "unsupported version alias", args: []string{"version"}},
+		{name: "unsupported short version", args: []string{"-v"}},
+		{name: "unsupported help spelling", args: []string{"-help"}},
+		{name: "flag assignment", args: []string{"--help=true"}},
+		{name: "argument separator", args: []string{"--"}},
+		{name: "root help extra argument", args: []string{"--help", "extra"}},
+		{name: "root short help extra argument", args: []string{"-h", "extra"}},
+		{name: "version extra argument", args: []string{"--version", "extra"}},
+		{name: "mixed root forms", args: []string{"--help", "--version"}},
 		{name: "unknown before help", args: []string{"unknown", "--help"}},
-		{name: "duplicate help", args: []string{"--help", "--help"}},
+		{name: "duplicate root help", args: []string{"--help", "--help"}},
+		{name: "unknown help target", args: []string{"help", "unknown"}},
+		{name: "help target extra argument", args: []string{"help", "build", "extra"}},
+		{name: "unknown command flag", args: []string{"build", "--unknown"}},
+		{name: "command extra argument", args: []string{"compare", "extra"}},
+		{name: "command help extra argument", args: []string{"verify", "--help", "extra"}},
+		{name: "command short help extra argument", args: []string{"inspect", "-h", "extra"}},
+		{name: "unsupported nested help", args: []string{"publish", "help"}},
+		{name: "token-like value", args: []string{"--token=top-secret"}, sensitive: true},
+		{name: "authenticated url", args: []string{"https://user:secret@example.com/source"}, sensitive: true},
+		{name: "embedded newline", args: []string{"unknown\nforged diagnostic"}, sensitive: true},
 	}
 
 	for _, test := range tests {
@@ -147,6 +242,13 @@ func TestRun_RejectsMultipleArguments(t *testing.T) {
 			}
 			if stderr != unknownArgumentText {
 				t.Errorf("Run() stderr = %q, want %q", stderr, unknownArgumentText)
+			}
+			if test.sensitive {
+				for _, arg := range test.args {
+					if strings.Contains(stderr, arg) {
+						t.Errorf("Run() stderr echoed untrusted argument %q", arg)
+					}
+				}
 			}
 		})
 	}
@@ -169,6 +271,13 @@ func TestRun_RepeatedInvocationsDoNotLeakState(t *testing.T) {
 			expectedStdout: "stategeodb version-a\n",
 		},
 		{
+			name:           "unavailable command",
+			args:           []string{"build"},
+			version:        "ignored",
+			expectedStatus: exitFailure,
+			expectedStderr: "stategeodb: build is not implemented in this build\n",
+		},
+		{
 			name:           "usage failure",
 			args:           []string{"unknown"},
 			version:        "ignored",
@@ -181,6 +290,13 @@ func TestRun_RepeatedInvocationsDoNotLeakState(t *testing.T) {
 			version:        "ignored",
 			expectedStatus: exitSuccess,
 			expectedStdout: helpText,
+		},
+		{
+			name:           "command help after failure",
+			args:           []string{"publish", "--help"},
+			version:        "ignored",
+			expectedStatus: exitSuccess,
+			expectedStdout: publishHelp,
 		},
 		{
 			name:           "second version",
@@ -208,26 +324,55 @@ func TestRun_RepeatedInvocationsDoNotLeakState(t *testing.T) {
 }
 
 func TestRun_OutputWriteFailure(t *testing.T) {
-	var stderr bytes.Buffer
-	status := Run(t.Context(), nil, failingWriter{}, &stderr, "ignored")
-
-	if status != exitFailure {
-		t.Errorf("Run() status = %d, want %d", status, exitFailure)
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "root help", args: nil},
+		{name: "version", args: []string{"--version"}},
+		{name: "command help", args: []string{"build", "--help"}},
 	}
-	if stderr.String() != outputFailureText {
-		t.Errorf("Run() stderr = %q, want %q", stderr.String(), outputFailureText)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stderr bytes.Buffer
+			status := Run(t.Context(), test.args, failingWriter{}, &stderr, "ignored")
+
+			if status != exitFailure {
+				t.Errorf("Run() status = %d, want %d", status, exitFailure)
+			}
+			if stderr.String() != outputFailureText {
+				t.Errorf("Run() stderr = %q, want %q", stderr.String(), outputFailureText)
+			}
+		})
 	}
 }
 
-func TestRun_UsageDiagnosticWriteFailure(t *testing.T) {
-	var stdout bytes.Buffer
-	status := Run(t.Context(), []string{"unknown"}, &stdout, failingWriter{}, "ignored")
-
-	if status != exitUsage {
-		t.Errorf("Run() status = %d, want %d", status, exitUsage)
+func TestRun_DiagnosticWriteFailureRetainsStatus(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		expectedStatus int
+	}{
+		{name: "usage failure", args: []string{"unknown"}, expectedStatus: exitUsage},
+		{name: "unavailable command", args: []string{"build"}, expectedStatus: exitFailure},
 	}
-	if stdout.String() != "" {
-		t.Errorf("Run() stdout = %q, want empty", stdout.String())
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			status := Run(t.Context(), test.args, &stdout, failingWriter{}, "ignored")
+			if status != test.expectedStatus {
+				t.Errorf("Run() status = %d, want %d", status, test.expectedStatus)
+			}
+			if stdout.String() != "" {
+				t.Errorf("Run() stdout = %q, want empty", stdout.String())
+			}
+		})
 	}
 }
 
