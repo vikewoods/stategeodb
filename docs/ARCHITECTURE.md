@@ -204,6 +204,52 @@ already downloaded files in tests and controlled environments.
 Opens and verifies one MMDB, reads its metadata, iterates networks, and maps its
 provider-specific schema into normalized records.
 
+The implemented MaxMind opening boundary uses the direct
+`github.com/oschwald/maxminddb-golang/v2` reader pinned at `v2.4.1` rather than
+the higher-level GeoIP reader. The direct API provides source metadata, full
+structural verification, and the network iterator required by Phase 1.3 while
+allowing provider records to remain separate from the source-neutral model.
+The reader is ISC licensed; its platform mapping support introduces
+`golang.org/x/sys` as an indirect runtime dependency.
+
+Opening accepts only exact `GeoLite2-City` and `GeoIP2-City` database types and
+binary format `2.0`. Format major or minor changes, near-match database names,
+Country, Enterprise, ASN, anonymous-IP, custom, and generated project database
+types are unsupported until explicitly added with fixture evidence. Both
+IPv4-only and dual-stack City databases are compatible at this boundary.
+
+A database is returned only after the reader opens the caller's path, required
+metadata compatibility is validated, and the upstream full verifier succeeds.
+Any failure after opening closes the reader; a cleanup failure is retained
+without hiding the primary classification. The owning wrapper must be used by
+pointer, and its caller is responsible for closing it. The upstream reader may
+use its supported memory map or in-memory fallback, and the wrapper must not
+rely on garbage collection to release either representation. Close must not
+race with future reader operations.
+
+The adapter captures database type, binary format version, build epoch, IP
+version, node count, record size, languages, and localized descriptions.
+Language slices and description maps are copied when captured and on every
+metadata access, so the snapshot remains independent and readable after the
+mapped reader closes. It never includes the source filesystem path.
+
+Metadata compatibility and structural verification do not prove that City
+records contain the expected country and subdivision shape. Network traversal,
+record-schema decoding, normalization, deterministic emission, and
+cancellation-aware application-controlled loops remain Phase 1.3 work. The
+synchronous open-and-verify primitive does not accept a context because the
+pinned calls cannot be interrupted safely; it is not run in a background
+goroutine to simulate cancellation.
+
+This primitive assumes acquisition supplies a stable, finite local artifact.
+It deliberately does not pre-open and then reopen the path, copy a complete
+database, reject symlinks, or impose an adapter-specific production size limit.
+Acquisition must publish a completed source as a stable inode and must not
+truncate or rewrite that inode while an mmap-backed reader is open. Full
+verification is synchronous and proportional to database contents; operational
+resource limits and cancellation begin where the application controls the
+Phase 1.3 traversal loop.
+
 ```go
 type SourceRecord struct {
     Prefix      netip.Prefix

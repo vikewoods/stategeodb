@@ -40,8 +40,20 @@ processing, and publication are not implemented in the current build.
 
 The internal source-neutral normalization layer now validates canonical IPv4,
 IPv6, and mapped-IPv4 prefixes, country and first-subdivision codes, and stable
-logical source IDs. It does not open or decode MMDB files, and it is not wired
-to any CLI command.
+logical source IDs. The MaxMind adapter pins
+`github.com/oschwald/maxminddb-golang/v2` at `v2.4.1` and can open a local
+`GeoLite2-City` or `GeoIP2-City` MMDB, validate its metadata, run the upstream
+full structural verifier, and expose an application-owned metadata snapshot.
+It does not traverse networks or decode records, and it is not wired to any CLI
+command. Source acquisition remains external.
+
+The adapter uses the direct ISC-licensed MMDB reader because the compiler needs
+metadata and full verification now and direct network iteration in the next
+phase without adopting the high-level GeoIP result model. Its current metadata
+compatibility is deliberately strict: database types must match exactly and
+the binary format must be `2.0`. The minor-version restriction follows the
+pinned verifier and must be revisited if that verifier adds newer format
+support. IPv4-only City databases remain compatible.
 
 ## Development
 
@@ -74,11 +86,11 @@ fi
 ```
 
 The current CLI keeps help, version, invalid-usage, and unavailable-command
-output text-only. Concrete configuration begins with real Phase 1 source
-fields; JSON schemas begin with structured report or inspection results;
-internal typed errors begin with domain failure modes; and operation-level
-cancellation tests begin with the first blocking command. All five domain
-operations remain unavailable in this foundation build.
+output text-only. Concrete configuration remains deferred until source
+ingestion is wired to an operation; JSON schemas begin with structured report
+or inspection results; and operation-level cancellation tests begin with the
+first application-controlled blocking loop. All five domain operations remain
+unavailable in this build.
 
 ## Why this exists
 
@@ -205,8 +217,9 @@ cluster volume.
 
 ## Data and licensing
 
-This repository contains code and documentation only. Source and generated
-MMDB files are ignored by Git.
+This repository contains code, documentation, and a small reviewed set of
+upstream test fixtures. Production source and generated MMDB files are ignored
+by Git.
 
 Operators are responsible for satisfying the terms of every configured data
 source, including attribution, update, internal-use, and redistribution

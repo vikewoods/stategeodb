@@ -10,6 +10,9 @@ docs/phases/
 /downloads/
 /sources/
 *.mmdb
+!testdata/maxmind/GeoIP2-City-Test.mmdb
+!testdata/maxmind/GeoIP2-Country-Test.mmdb
+!testdata/maxmind/GeoIP2-City-Test-Broken-Double-Format.mmdb
 *.mmdb.json
 *.mmdb.gz
 *.sha256
