@@ -31,6 +31,9 @@ type runtimeRecord struct {
 }
 
 func TestWriteCompatibility(t *testing.T) {
+	if SchemaVersion != 1 {
+		t.Fatalf("SchemaVersion = %d, want 1", SchemaVersion)
+	}
 	records := compatibilityRecords(t)
 	data := writeDatabase(t, records, testBuildEpoch)
 	database := openDatabase(t, data)

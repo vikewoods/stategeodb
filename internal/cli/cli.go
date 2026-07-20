@@ -29,7 +29,7 @@ Commands:
   inspect   Print bounded metadata and explicitly selected lookups
   publish   Publish an already built and verified candidate artifact
 
-The build command is operational. Other domain commands remain unavailable.
+The build and inspect commands are operational. Other domain commands remain unavailable.
 `
 	buildHelp = `stategeodb build - compile one local City MMDB into a verified candidate artifact.
 
@@ -76,11 +76,16 @@ Usage:
   stategeodb help inspect
   stategeodb inspect --help
   stategeodb inspect -h
+  stategeodb inspect --database <path> [--ip <address>]...
 
-Inspect will print bounded metadata and explicitly selected lookups for diagnostics.
-It will not dump a complete dataset by default.
+Required flags:
+  --database <path>   Generated stategeodb MMDB artifact
 
-The inspect operation is not implemented in this build.
+Optional flags:
+  --ip <address>      Explicit IP lookup; repeat up to 32 times
+
+Inspect accepts only generated stategeodb artifacts. With no --ip flags it
+prints metadata only. It never prints or dumps the complete database.
 `
 	publishHelp = `stategeodb publish - publish an already built and verified candidate artifact.
 
@@ -114,7 +119,15 @@ func Run(
 	stderr io.Writer,
 	version string,
 ) int {
-	return run(ctx, args, stdout, stderr, version, defaultBuildOperations())
+	return runWithOperations(
+		ctx,
+		args,
+		stdout,
+		stderr,
+		version,
+		defaultBuildOperations(),
+		defaultInspectOperations(),
+	)
 }
 
 func run(
@@ -124,6 +137,26 @@ func run(
 	stderr io.Writer,
 	version string,
 	buildOperations buildOperations,
+) int {
+	return runWithOperations(
+		ctx,
+		args,
+		stdout,
+		stderr,
+		version,
+		buildOperations,
+		defaultInspectOperations(),
+	)
+}
+
+func runWithOperations(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	version string,
+	buildOperations buildOperations,
+	inspectOperations inspectOperations,
 ) int {
 	if len(args) == 0 {
 		return writeResult(stdout, stderr, helpText)
@@ -152,7 +185,12 @@ func run(
 		return writeResult(stdout, stderr, cmd.help)
 	}
 	if cmd.isOperational {
-		return runBuild(ctx, args[1:], stdout, stderr, buildOperations)
+		switch cmd.name {
+		case "build":
+			return runBuild(ctx, args[1:], stdout, stderr, buildOperations)
+		case "inspect":
+			return runInspect(ctx, args[1:], stdout, stderr, inspectOperations)
+		}
 	}
 	if len(args) == 1 {
 		return writeUnavailable(stderr, cmd.name)
@@ -184,7 +222,7 @@ func findCommand(name string) (command, bool) {
 	case "verify":
 		return command{name: name, help: verifyHelp}, true
 	case "inspect":
-		return command{name: name, help: inspectHelp}, true
+		return command{name: name, help: inspectHelp, isOperational: true}, true
 	case "publish":
 		return command{name: name, help: publishHelp}, true
 	default:

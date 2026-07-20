@@ -11,7 +11,7 @@ var testCommands = []command{
 	{name: "build", help: buildHelp, isOperational: true},
 	{name: "compare", help: compareHelp},
 	{name: "verify", help: verifyHelp},
-	{name: "inspect", help: inspectHelp},
+	{name: "inspect", help: inspectHelp, isOperational: true},
 	{name: "publish", help: publishHelp},
 }
 
@@ -31,7 +31,7 @@ func TestRun_RootHelpForms(t *testing.T) {
 		"stategeodb -h",
 		"stategeodb help",
 		"stategeodb --version",
-		"The build command is operational.",
+		"The build and inspect commands are operational.",
 	}
 	for _, content := range stableContent {
 		if !strings.Contains(expectedHelp, content) {
@@ -138,7 +138,7 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 		},
 		{
 			name:     "inspect",
-			contains: []string{"bounded metadata", "explicitly selected lookups", "not dump a complete dataset"},
+			contains: []string{"bounded metadata", "explicitly selected lookups", "never prints or dumps", "--database", "--ip", "32", "generated stategeodb artifacts"},
 		},
 		{
 			name:     "publish",
@@ -228,7 +228,7 @@ func TestRun_RejectsInvalidUsage(t *testing.T) {
 		{name: "help target extra argument", args: []string{"help", "build", "extra"}},
 		{name: "command extra argument", args: []string{"compare", "extra"}},
 		{name: "command help extra argument", args: []string{"verify", "--help", "extra"}},
-		{name: "command short help extra argument", args: []string{"inspect", "-h", "extra"}},
+		{name: "command short help extra argument", args: []string{"publish", "-h", "extra"}},
 		{name: "unsupported nested help", args: []string{"publish", "help"}},
 		{name: "token-like value", args: []string{"--token=top-secret"}, sensitive: true},
 		{name: "authenticated url", args: []string{"https://user:secret@example.com/source"}, sensitive: true},

@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	// SchemaVersion is the machine-readable revision of SchemaDescription.
+	SchemaVersion = 1
 	// DatabaseType identifies the runtime record shape. Incompatible runtime
 	// record changes require a new database type.
 	DatabaseType = "StateGeo-Country-Subdivision"
