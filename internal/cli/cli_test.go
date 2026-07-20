@@ -8,7 +8,7 @@ import (
 )
 
 var testCommands = []command{
-	{name: "build", help: buildHelp},
+	{name: "build", help: buildHelp, isOperational: true},
 	{name: "compare", help: compareHelp},
 	{name: "verify", help: verifyHelp},
 	{name: "inspect", help: inspectHelp},
@@ -31,7 +31,7 @@ func TestRun_RootHelpForms(t *testing.T) {
 		"stategeodb -h",
 		"stategeodb help",
 		"stategeodb --version",
-		"Domain operations are not implemented in this build.",
+		"The build command is operational.",
 	}
 	for _, content := range stableContent {
 		if !strings.Contains(expectedHelp, content) {
@@ -107,8 +107,11 @@ func TestRun_CommandHelpForms(t *testing.T) {
 				}
 			}
 
-			if !strings.Contains(cmd.help, "not implemented in this build") {
+			if !cmd.isOperational && !strings.Contains(cmd.help, "not implemented in this build") {
 				t.Errorf("%s help does not identify unavailable behavior", cmd.name)
+			}
+			if cmd.isOperational && strings.Contains(cmd.help, "not implemented in this build") {
+				t.Errorf("%s help identifies operational behavior as unavailable", cmd.name)
 			}
 		})
 	}
@@ -122,7 +125,8 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 	}{
 		{
 			name:     "build",
-			contains: []string{"configured local sources and overrides", "verified candidate artifact", "will not publish or replace"},
+			contains: []string{"one local City MMDB", "verified candidate artifact", "does not publish or replace", "separate publish command"},
+			excludes: []string{"configured", "JSON", "not implemented"},
 		},
 		{
 			name:     "compare",
@@ -166,6 +170,9 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 
 func TestRun_RecognizedCommandsAreUnavailable(t *testing.T) {
 	for _, cmd := range testCommands {
+		if cmd.isOperational {
+			continue
+		}
 		t.Run(cmd.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -219,7 +226,6 @@ func TestRun_RejectsInvalidUsage(t *testing.T) {
 		{name: "duplicate root help", args: []string{"--help", "--help"}},
 		{name: "unknown help target", args: []string{"help", "unknown"}},
 		{name: "help target extra argument", args: []string{"help", "build", "extra"}},
-		{name: "unknown command flag", args: []string{"build", "--unknown"}},
 		{name: "command extra argument", args: []string{"compare", "extra"}},
 		{name: "command help extra argument", args: []string{"verify", "--help", "extra"}},
 		{name: "command short help extra argument", args: []string{"inspect", "-h", "extra"}},
@@ -271,11 +277,11 @@ func TestRun_RepeatedInvocationsDoNotLeakState(t *testing.T) {
 			expectedStdout: "stategeodb version-a\n",
 		},
 		{
-			name:           "unavailable command",
+			name:           "build usage failure",
 			args:           []string{"build"},
 			version:        "ignored",
 			expectedStatus: exitFailure,
-			expectedStderr: "stategeodb: build is not implemented in this build\n",
+			expectedStderr: invalidBuildUsageText,
 		},
 		{
 			name:           "usage failure",
@@ -357,7 +363,7 @@ func TestRun_DiagnosticWriteFailureRetainsStatus(t *testing.T) {
 		expectedStatus int
 	}{
 		{name: "usage failure", args: []string{"unknown"}, expectedStatus: exitFailure},
-		{name: "unavailable command", args: []string{"build"}, expectedStatus: exitFailure},
+		{name: "unavailable command", args: []string{"compare"}, expectedStatus: exitFailure},
 	}
 
 	for _, test := range tests {

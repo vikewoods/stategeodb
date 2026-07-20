@@ -23,25 +23,30 @@ Usage:
   stategeodb <command> -h
 
 Commands:
-  build     Compile local sources and overrides into a verified candidate artifact
+  build     Compile one local City MMDB into a verified candidate artifact
   compare   Report source coverage and disagreement without merging or publishing
   verify    Validate source or generated artifacts and configured quality gates
   inspect   Print bounded metadata and explicitly selected lookups
   publish   Publish an already built and verified candidate artifact
 
-Domain operations are not implemented in this build.
+The build command is operational. Other domain commands remain unavailable.
 `
-	buildHelp = `stategeodb build - compile local sources and overrides into a verified candidate artifact.
+	buildHelp = `stategeodb build - compile one local City MMDB into a verified candidate artifact.
 
 Usage:
   stategeodb help build
   stategeodb build --help
   stategeodb build -h
+  stategeodb build --source <path> --source-id <id> --workspace-root <path> --build-epoch <unix-seconds>
 
-Build will compile configured local sources and overrides into a verified candidate artifact.
-It will not publish or replace the stable artifact.
+Required flags:
+  --source <path>           Local GeoLite2 City or GeoIP2 City MMDB
+  --source-id <id>          Logical source identifier
+  --workspace-root <path>   Existing absolute directory for candidate workspaces
+  --build-epoch <seconds>   Positive Unix timestamp encoded into the candidate
 
-The build operation is not implemented in this build.
+Build writes and verifies a candidate but does not publish or replace a database.
+Use the separate publish command to publish an already verified candidate.
 `
 	compareHelp = `stategeodb compare - report source coverage and disagreement without merging or publishing.
 
@@ -94,19 +99,31 @@ The publish operation is not implemented in this build.
 )
 
 type command struct {
-	name string
-	help string
+	name          string
+	help          string
+	isOperational bool
 }
 
 // Run executes the root CLI behavior with caller-owned arguments, streams, and
-// version metadata. The context is carried into this boundary so later blocking
-// commands can honor cancellation without changing its signature.
+// version metadata. The context is propagated to operational commands so their
+// blocking work can honor caller cancellation.
 func Run(
 	ctx context.Context,
 	args []string,
 	stdout io.Writer,
 	stderr io.Writer,
 	version string,
+) int {
+	return run(ctx, args, stdout, stderr, version, defaultBuildOperations())
+}
+
+func run(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	version string,
+	buildOperations buildOperations,
 ) int {
 	if len(args) == 0 {
 		return writeResult(stdout, stderr, helpText)
@@ -131,11 +148,14 @@ func Run(
 	if !ok {
 		return writeInvalidUsage(stderr)
 	}
-	if len(args) == 1 {
-		return writeUnavailable(stderr, cmd.name)
-	}
 	if len(args) == 2 && isHelpFlag(args[1]) {
 		return writeResult(stdout, stderr, cmd.help)
+	}
+	if cmd.isOperational {
+		return runBuild(ctx, args[1:], stdout, stderr, buildOperations)
+	}
+	if len(args) == 1 {
+		return writeUnavailable(stderr, cmd.name)
 	}
 	return writeInvalidUsage(stderr)
 }
@@ -158,7 +178,7 @@ func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
 func findCommand(name string) (command, bool) {
 	switch name {
 	case "build":
-		return command{name: name, help: buildHelp}, true
+		return command{name: name, help: buildHelp, isOperational: true}, true
 	case "compare":
 		return command{name: name, help: compareHelp}, true
 	case "verify":
@@ -177,10 +197,8 @@ func isHelpFlag(arg string) bool {
 }
 
 func writeResult(stdout io.Writer, stderr io.Writer, result string) int {
-	if stdout != nil {
-		if _, err := io.WriteString(stdout, result); err == nil {
-			return exitSuccess
-		}
+	if writeString(stdout, result) {
+		return exitSuccess
 	}
 
 	writeDiagnostic(stderr, outputFailureText)
