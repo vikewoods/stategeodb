@@ -55,8 +55,8 @@ func TestWriteCompatibility(t *testing.T) {
 	if metadata.IPVersion != 6 {
 		t.Errorf("IPVersion = %d, want 6", metadata.IPVersion)
 	}
-	if metadata.RecordSize != 28 {
-		t.Errorf("RecordSize = %d, want 28", metadata.RecordSize)
+	if metadata.RecordSize != RecordSize {
+		t.Errorf("RecordSize = %d, want %d", metadata.RecordSize, RecordSize)
 	}
 	if metadata.BinaryFormatMajorVersion != 2 || metadata.BinaryFormatMinorVersion != 0 {
 		t.Errorf(

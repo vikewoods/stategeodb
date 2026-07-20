@@ -71,6 +71,51 @@ func TestPublish_CreatesVerifiedDestination(t *testing.T) {
 	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
 }
 
+func TestPublish_CreatesDestinationFromLegacyCandidate(t *testing.T) {
+	candidateDirectory := t.TempDir()
+	destinationDirectory := t.TempDir()
+	candidate := writeCompatibleCandidate(
+		t,
+		candidateDirectory,
+		"candidate.mmdb",
+		testBuildEpoch,
+		"US",
+		mmdb.LegacyRecordSize,
+	)
+	destination := filepath.Join(destinationDirectory, "stategeo.mmdb")
+	candidateBefore := readFile(t, candidate)
+
+	result, err := Publish(t.Context(), Request{
+		CandidatePath:   candidate,
+		DestinationPath: destination,
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if result.Action != ActionCreated {
+		t.Errorf("Publish() action = %q, want %q", result.Action, ActionCreated)
+	}
+	if !bytes.Equal(readFile(t, destination), candidateBefore) {
+		t.Error("destination bytes differ from legacy candidate")
+	}
+	inspection, err := inspect.Inspect(
+		t.Context(),
+		inspect.Request{DatabasePath: destination},
+	)
+	if err != nil {
+		t.Fatalf("Inspect(destination) error = %v", err)
+	}
+	if inspection.Metadata.RecordSize != mmdb.LegacyRecordSize {
+		t.Errorf(
+			"destination record size = %d, want %d",
+			inspection.Metadata.RecordSize,
+			mmdb.LegacyRecordSize,
+		)
+	}
+	assertCandidateUnchanged(t, candidate, candidateBefore)
+	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
+}
+
 func TestPublish_IdenticalDestinationIsUnchanged(t *testing.T) {
 	candidateDirectory := t.TempDir()
 	destinationDirectory := t.TempDir()
@@ -112,6 +157,71 @@ func TestPublish_IdenticalDestinationIsUnchanged(t *testing.T) {
 	}
 	if !after.ModTime().Equal(before.ModTime()) || after.Mode() != before.Mode() {
 		t.Errorf("destination metadata changed: before=%v/%v after=%v/%v", before.ModTime(), before.Mode(), after.ModTime(), after.Mode())
+	}
+	assertCandidateUnchanged(t, candidate, candidateBefore)
+	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
+}
+
+func TestPublish_ReplacesLegacyEncodingThenBecomesUnchanged(t *testing.T) {
+	candidateDirectory := t.TempDir()
+	destinationDirectory := t.TempDir()
+	candidate := writeCandidate(
+		t,
+		candidateDirectory,
+		"candidate.mmdb",
+		testBuildEpoch,
+		"US",
+	)
+	destination := writeCompatibleCandidate(
+		t,
+		destinationDirectory,
+		"stategeo.mmdb",
+		testBuildEpoch,
+		"US",
+		mmdb.LegacyRecordSize,
+	)
+	candidateBefore := readFile(t, candidate)
+	if bytes.Equal(candidateBefore, readFile(t, destination)) {
+		t.Fatal("current and legacy encodings produced identical bytes")
+	}
+
+	result, err := Publish(t.Context(), Request{
+		CandidatePath:   candidate,
+		DestinationPath: destination,
+	})
+	if err != nil {
+		t.Fatalf("first Publish() error = %v", err)
+	}
+	if result.Action != ActionReplaced {
+		t.Errorf("first Publish() action = %q, want %q", result.Action, ActionReplaced)
+	}
+	if !bytes.Equal(readFile(t, destination), candidateBefore) {
+		t.Error("replacement bytes differ from current candidate")
+	}
+	inspection, err := inspect.Inspect(
+		t.Context(),
+		inspect.Request{DatabasePath: destination},
+	)
+	if err != nil {
+		t.Fatalf("Inspect(replacement) error = %v", err)
+	}
+	if inspection.Metadata.RecordSize != mmdb.RecordSize {
+		t.Errorf(
+			"replacement record size = %d, want %d",
+			inspection.Metadata.RecordSize,
+			mmdb.RecordSize,
+		)
+	}
+
+	result, err = Publish(t.Context(), Request{
+		CandidatePath:   candidate,
+		DestinationPath: destination,
+	})
+	if err != nil {
+		t.Fatalf("second Publish() error = %v", err)
+	}
+	if result.Action != ActionUnchanged {
+		t.Errorf("second Publish() action = %q, want %q", result.Action, ActionUnchanged)
 	}
 	assertCandidateUnchanged(t, candidate, candidateBefore)
 	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
@@ -860,6 +970,48 @@ func writeCandidate(t *testing.T, directory, name string, epoch int64, country s
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close(candidate) error = %v", err)
+	}
+	return path
+}
+
+func writeCompatibleCandidate(
+	t *testing.T,
+	directory string,
+	name string,
+	epoch int64,
+	country string,
+	recordSize int,
+) string {
+	t.Helper()
+	tree, err := mmdbwriter.New(mmdbwriter.Options{
+		BuildEpoch:              epoch,
+		DatabaseType:            mmdb.DatabaseType,
+		Description:             map[string]string{"en": mmdb.SchemaDescription},
+		IncludeReservedNetworks: true,
+		IPVersion:               6,
+		Languages:               []string{},
+		RecordSize:              recordSize,
+	})
+	if err != nil {
+		t.Fatalf("mmdbwriter.New() error = %v", err)
+	}
+	value := mmdbtype.Map{
+		"country": mmdbtype.Map{"iso_code": mmdbtype.String(country)},
+	}
+	if err := tree.Insert(prefixNetwork(netip.MustParsePrefix("192.0.2.0/24")), value); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	path := filepath.Join(directory, name)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := tree.WriteTo(file); err != nil {
+		_ = file.Close()
+		t.Fatalf("WriteTo() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 	return path
 }

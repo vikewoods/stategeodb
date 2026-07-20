@@ -43,7 +43,7 @@ func TestInspect_MetadataAndBoundedLookups(t *testing.T) {
 		BinaryFormatMajor: 2,
 		BinaryFormatMinor: 0,
 		IPVersion:         6,
-		RecordSize:        28,
+		RecordSize:        mmdb.RecordSize,
 	}
 	expectedMetadata.NodeCount = result.Metadata.NodeCount
 	if result.Metadata.NodeCount == 0 || result.Metadata != expectedMetadata {
@@ -73,6 +73,27 @@ func TestInspect_MetadataOnly(t *testing.T) {
 	}
 	if result.Lookups == nil || len(result.Lookups) != 0 {
 		t.Errorf("Lookups = %#v, want non-nil empty caller-owned slice", result.Lookups)
+	}
+}
+
+func TestInspect_ReportsLegacyRecordSize(t *testing.T) {
+	path := writeCustomDatabase(
+		t,
+		mmdb.DatabaseType,
+		mmdb.SchemaDescription,
+		"US",
+		mmdb.LegacyRecordSize,
+	)
+	result, err := Inspect(t.Context(), Request{DatabasePath: path})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	if result.Metadata.RecordSize != mmdb.LegacyRecordSize {
+		t.Errorf(
+			"RecordSize = %d, want %d",
+			result.Metadata.RecordSize,
+			mmdb.LegacyRecordSize,
+		)
 	}
 }
 
@@ -141,7 +162,13 @@ func TestInspect_RejectsUnsupportedMetadata(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := writeCustomDatabase(t, test.databaseType, test.description, "US")
+			path := writeCustomDatabase(
+				t,
+				test.databaseType,
+				test.description,
+				"US",
+				mmdb.RecordSize,
+			)
 			_, err := Inspect(t.Context(), Request{DatabasePath: path})
 			if !errors.Is(err, ErrUnsupported) || errors.Is(err, ErrCorrupt) {
 				t.Errorf("Inspect() error = %v, want only ErrUnsupported", err)
@@ -175,7 +202,13 @@ func TestInspect_ClassifiesOpenAndCorruptFailuresWithoutDetails(t *testing.T) {
 }
 
 func TestInspect_PreservesMalformedLocationClassification(t *testing.T) {
-	path := writeCustomDatabase(t, mmdb.DatabaseType, mmdb.SchemaDescription, "USA")
+	path := writeCustomDatabase(
+		t,
+		mmdb.DatabaseType,
+		mmdb.SchemaDescription,
+		"USA",
+		mmdb.RecordSize,
+	)
 	_, err := Inspect(t.Context(), Request{
 		DatabasePath: path,
 		Addresses:    []netip.Addr{netip.MustParseAddr("192.0.2.1")},
@@ -264,7 +297,13 @@ func mustRecord(t *testing.T, prefix, country, subdivision string) source.Record
 	return record
 }
 
-func writeCustomDatabase(t *testing.T, databaseType, description, country string) string {
+func writeCustomDatabase(
+	t *testing.T,
+	databaseType string,
+	description string,
+	country string,
+	recordSize int,
+) string {
 	t.Helper()
 	tree, err := mmdbwriter.New(mmdbwriter.Options{
 		BuildEpoch:              testBuildEpoch,
@@ -273,7 +312,7 @@ func writeCustomDatabase(t *testing.T, databaseType, description, country string
 		IncludeReservedNetworks: true,
 		IPVersion:               6,
 		Languages:               []string{},
-		RecordSize:              28,
+		RecordSize:              recordSize,
 	})
 	if err != nil {
 		t.Fatalf("mmdbwriter.New() error = %v", err)
@@ -335,7 +374,7 @@ func newFakeDatabase() *fakeDatabase {
 			BuildEpoch:               uint(testBuildEpoch),
 			IPVersion:                6,
 			NodeCount:                1,
-			RecordSize:               28,
+			RecordSize:               mmdb.RecordSize,
 		},
 		lookup: fakeLookup{found: true, prefix: netip.MustParsePrefix("192.0.2.0/24"), country: "US"},
 	}

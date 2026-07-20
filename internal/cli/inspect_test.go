@@ -102,7 +102,7 @@ func TestRunInspect_ExactOutput(t *testing.T) {
 		"build_epoch=1700000123\n" +
 		"binary_format=2.0\n" +
 		"ip_version=6\n" +
-		"record_size=28\n" +
+		"record_size=" + strconv.Itoa(mmdb.RecordSize) + "\n" +
 		"node_count=9\n" +
 		"lookup_count=2\n" +
 		"lookup_1_ip=192.0.2.1\n" +
@@ -145,6 +145,24 @@ func TestRunInspect_MetadataOnly(t *testing.T) {
 	)
 	if status != exitSuccess || stderr != "" || !strings.HasSuffix(stdout, "lookup_count=0\n") || strings.Contains(stdout, "lookup_1_") {
 		t.Errorf("metadata-only = %d/%q/%q", status, stdout, stderr)
+	}
+}
+
+func TestFormatInspectOutput_LegacyRecordSize(t *testing.T) {
+	result := validInspectResultFixture()
+	result.Metadata.RecordSize = mmdb.LegacyRecordSize
+	output, ok := formatInspectOutput(result)
+	if !ok {
+		t.Fatal("formatInspectOutput() rejected legacy record size")
+	}
+	expected := "record_size=" + strconv.Itoa(mmdb.LegacyRecordSize) + "\n"
+	if !strings.Contains(output, expected) {
+		t.Errorf("formatInspectOutput() = %q, want %q", output, expected)
+	}
+
+	result.Metadata.RecordSize = 32
+	if _, ok := formatInspectOutput(result); ok {
+		t.Error("formatInspectOutput() accepted unsupported record size")
 	}
 }
 
@@ -276,7 +294,7 @@ func validInspectResultFixture() inspect.Result {
 			BinaryFormatMajor: 2,
 			BinaryFormatMinor: 0,
 			IPVersion:         6,
-			RecordSize:        28,
+			RecordSize:        mmdb.RecordSize,
 			NodeCount:         9,
 		},
 		Lookups: []inspect.Lookup{

@@ -18,6 +18,11 @@ import (
 const (
 	// SchemaVersion is the machine-readable revision of SchemaDescription.
 	SchemaVersion = 1
+	// RecordSize is the search-tree record size used for newly generated artifacts.
+	RecordSize = 24
+	// LegacyRecordSize is the supported schema-v1 search-tree record size used
+	// by artifacts generated before the current encoding contract.
+	LegacyRecordSize = 28
 	// DatabaseType identifies the runtime record shape. Incompatible runtime
 	// record changes require a new database type.
 	DatabaseType = "StateGeo-Country-Subdivision"
@@ -86,7 +91,7 @@ func Write(destination io.Writer, records []source.Record, options Options) (int
 		IncludeReservedNetworks: true,
 		IPVersion:               6,
 		Languages:               []string{},
-		RecordSize:              28,
+		RecordSize:              RecordSize,
 		DisableMetadataPointers: false,
 	})
 	if err != nil {

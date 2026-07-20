@@ -1,205 +1,506 @@
-# Repository guidance
+# stategeodb agent guidance
 
-## Mission
+## Purpose
 
-Build `stategeodb` as a deterministic, automation-first Go CLI that compiles
-licensed geolocation sources into a minimal MMDB for local use by
+`stategeodb` is a deterministic, automation-first Go CLI that compiles a
+locally acquired MaxMind City MMDB into the minimal MMDB consumed by
 `traefik-plugin-state-geo`.
 
-The CLI is an offline build tool. It is not a request-time service and must not
-introduce a network, SQL, document-database, cache-server, or CDN dependency
-into Traefik's request path.
+Compilation is an offline build-time operation. Do not introduce a request-time
+network, SQL database, document database, cache server, CDN, or external lookup
+dependency into the Traefik request path.
 
-## Read before changing code
+The compiler owns geographic data transformation and artifact integrity.
+Traefik owns runtime allow/deny policy.
 
-1. Read `README.md` for current operator behavior and project boundaries.
-2. Read `docs/ARCHITECTURE.md` for implemented ownership and durable decisions.
-3. Read the relevant priorities and constraints in `docs/ROADMAP.md`.
-4. Inspect the current code and tests before selecting packages or changing an
-   interface.
+## Repository map
 
-Task-level plans, acceptance criteria, and status belong in GitHub issues or
-another explicitly approved tracker when the work needs a durable public
-record. Do not create repository-local execution journals or private planning
-files. Prompts and transient validation evidence remain in the working
-conversation unless the user asks to record them in an issue or durable public
-document.
+* `cmd/stategeodb`: minimal executable entry point.
+* `internal/cli`: command parsing, help, stdout/stderr contracts, and diagnostics.
+* `internal/source`: normalized geographic records and source-neutral rules.
+* `internal/source/maxmind`: verified MaxMind City source ingestion.
+* `internal/mmdb`: deterministic runtime MMDB encoding.
+* `internal/compiler`: candidate creation and behavioral equivalence.
+* `internal/artifact`: generated-artifact verification.
+* `internal/inspect`: bounded metadata and selected-address inspection.
+* `internal/publish`: verified byte comparison and atomic local replacement.
+* `testdata`: approved fixture provenance and licensing material only.
+* `dist`: ignored generated CLI binaries and published local artifacts.
+* `tmp`: ignored private inputs and operator-owned temporary workspaces.
 
-## Authorization boundaries
+Do not add generic `common`, `utils`, `helpers`, or `model` packages when a
+specific owning package is available.
 
-- For review, explanation, diagnosis, or planning requests, inspect relevant
-  files and report findings. Do not implement changes unless requested.
-- For build, change, or fix requests, make the requested in-repository edits and
-  run relevant non-destructive validation without pausing for routine approval.
-- Require explicit confirmation before publishing images or releases, pushing
-  Git changes, deploying to a cluster, writing to another repository, deleting
-  material data, rotating credentials, or materially expanding the requested
-  scope.
-- Never download or redistribute licensed production data unless the task
-  explicitly authorizes that source and use.
+## Context routing
 
-## Project boundaries
+Inspect the relevant implementation and tests before changing code. Read
+documentation according to the task instead of loading every document
+unconditionally:
 
-- Keep the compiler in this repository and the Traefik middleware in its own
-  repository. Do not copy writer or CLI dependencies into the Yaegi plugin.
-- Keep live Kubernetes resources in their cluster repositories. This repository
-  may contain reviewed reference schemas and examples only when explicitly
-  requested.
-- Keep geographic data separate from access-control policy. Location
-  corrections may change country or subdivision facts; allow/deny rules belong
-  to middleware or cluster policy.
-- Keep generated databases, credentials, source archives, build workspaces, and
-  private operator data out of Git.
+* `README.md`: current operator behavior, commands, requirements, and limitations.
+* `docs/ARCHITECTURE.md`: implemented package ownership, runtime contracts,
+  trust boundaries, determinism, verification, and publication semantics.
+* `docs/ROADMAP.md`: durable future direction and feature priority.
+* `testdata/README.md`: fixture provenance, licensing, and fixture rules.
+* `go.mod`: Go version and pinned dependencies.
+* `Makefile`: supported local build, validation, and artifact workflow.
 
-## Go and CLI conventions
+Production code and tests are the source of truth when documentation conflicts
+with implemented behavior.
 
-- Use the Go version declared by `go.mod`.
-- Keep `main` minimal. Command handlers parse input and delegate to internal
-  packages; domain logic must remain independently testable.
-- Prefer `net/netip` for IPv4, IPv6, prefixes, and address normalization.
-- Pass `context.Context` through acquisition, compilation, verification, and
-  publication operations that can block or be cancelled.
-- Use explicit constructors and narrow interfaces at source, compiler, writer,
-  verifier, and publisher boundaries.
-- Prefer the standard library. Add a production dependency only when it has a
-  clear ownership, maintenance, security, or correctness advantage.
-- Use the upstream MMDB reader and MaxMind writer only in this compiled tool;
-  do not modify or reuse the Traefik plugin's Yaegi compatibility shim.
-- Avoid package globals for mutable build state. A command invocation must own
-  its configuration, inputs, temporary files, and result.
+Do not create execution journals, private phase trackers, generated planning
+directories, or task histories in the repository. Use the current task context
+unless the user explicitly requests a durable issue or document.
 
-### Command behavior
+## Scope and authorization
 
-- Commands must be non-interactive and safe for shell pipelines and unattended
-  local automation.
-- Machine-readable results go to stdout. Logs and diagnostics go to stderr.
-- Add explicit JSON output only when a report or inspection operation has a
-  reviewed structured-result contract; current help and version output remains
-  text-only.
-- Invalid flags or configuration are usage failures; corrupt inputs,
-  verification failures, and publication failures are distinguishable through
-  diagnostics and, when domain behavior exists, internal error classification.
-- The current process-status contract is binary: `0` for success and `1` for
-  failure. Change it only for a concrete automation requirement.
-- Do not call `os.Exit` below `main`; return errors so deferred cleanup runs.
-- Do not print credentials, authenticated URLs, source archives, or client IP
-  samples in normal logs.
-- Blocking operations must honor caller cancellation, and cancellation must
-  leave the current published MMDB unchanged.
+* Reviews, explanations, diagnoses, and plans are read-only unless the user also
+  requests implementation.
+* Implementation requests authorize relevant in-repository edits and
+  non-destructive validation.
+* Require explicit authorization before:
 
-## Data invariants
+  * staging, committing, tagging, or pushing Git changes;
+  * publishing releases, packages, binaries, or container images;
+  * deploying or changing live infrastructure;
+  * modifying another repository;
+  * deleting or overwriting user-owned data outside task-owned temporary paths;
+  * downloading, copying, or redistributing licensed production data;
+  * materially expanding the requested product scope.
+* Preserve unrelated worktree changes.
+* Do not revert, rewrite, format, move, or delete unrelated files.
+* Keep live Kubernetes, Longhorn, and Traefik deployment resources in their
+  owning repositories.
+* This repository owns the local compiler and reviewed reference material, not
+  live cluster state.
 
-- IPv4 and IPv6 behavior must be covered by the same feature and test work.
-- Normalize runtime output to `country.iso_code` and optional
-  `subdivisions[0].iso_code` unless architecture is deliberately revised.
-- Identical logical inputs, configuration, and injected build time must produce
-  byte-identical output.
-- Never replace the published artifact until the complete candidate passes all
-  configured structural and behavioral gates.
-- Provider disagreement is evidence of uncertainty, not proof that either
-  provider is correct.
+When scope is ambiguous, choose the smallest implementation that satisfies the
+stated outcome.
 
-If corrections are implemented, longest prefix wins and duplicate conflicting
-prefixes are build errors. Apply corrections after provider normalization and
-record their provenance in build evidence. If fallback merging is implemented,
-primary values remain authoritative and a secondary source may fill only
-missing data under an explicit configured policy.
+## Product boundaries
 
-## Filesystem and publication safety
+* Keep geographic facts separate from access-control policy.
+* Do not encode allow/deny decisions, blocked states, customer policy, or
+  middleware configuration in MMDB records.
+* Source acquisition remains external to the compiler unless explicitly added
+  as a reviewed product feature.
+* Longhorn PVC synchronization and Traefik reload orchestration remain outside
+  this repository unless explicitly authorized as a later integration.
+* Do not add speculative support for GeoIP2 Enterprise, secondary providers,
+  Kubernetes Jobs, backups, rollback, or remote publication.
 
-- Create publication temporaries beside the final destination when atomic
-  rename is required.
-- Reopen and verify the exact candidate snapshot before publication.
-- Preserve the existing artifact on decode, compile, verification, checksum,
-  copy, or rename failure.
-- Avoid unresolved globs and broad recursive cleanup. Delete only validated
-  per-run temporary paths.
-- Tests must use temporary directories and synthetic or license-compatible
-  fixtures, never a production MMDB.
+## Artifact contract
 
-## Verification
+The active runtime artifact profile is defined by production constants,
+verification code, tests, and `docs/ARCHITECTURE.md`.
 
-Run validation proportional to the change. When Make is available, `make check`
-is the preferred convenience entry point. It must validate without formatting
-or otherwise rewriting tracked source. The underlying baseline remains visible
-and directly runnable:
+Do not change the artifact profile implicitly.
+
+Any change to retained geographic meaning must deliberately address:
+
+* database identity;
+* schema version or compatibility;
+* writer encoding;
+* artifact verification;
+* compiler equivalence rules;
+* inspect behavior;
+* publication acceptance;
+* Traefik consumer compatibility;
+* documentation and migration behavior.
+
+Geographic projection must remain explicit. For example, retaining subdivisions
+only for a specific country is a semantic artifact-profile change, not a hidden
+writer optimization.
+
+Physical MMDB encoding settings are implementation details. Maintain one
+canonical production encoding. Do not expose record size or similar physical
+encoding choices as CLI flags without a concrete operator requirement.
+
+Legacy or experimental encodings belong in tests or explicit migration tooling,
+not in the normal production command surface.
+
+## Durable invariants
+
+* Cover native IPv4 and IPv6 behavior together.
+* Use canonical IP prefixes.
+* Preserve the distinction between:
+
+  * an address absent from the database; and
+  * a present network whose required geographic values are unknown.
+* Identical logical input, artifact profile, configuration, and injected build
+  time must produce byte-identical output.
+* Source identity and provenance must not affect runtime MMDB bytes unless the
+  artifact contract explicitly requires them.
+* Do not return or publish partial compiler output.
+* Do not publish a candidate until all required structural, schema, and
+  behavioral verification passes.
+* Verify the exact file snapshot consumed at each trust-sensitive boundary.
+* Preserve deterministic ordering and conflict resolution.
+* Do not silently deduplicate conflicting prefixes.
+* Do not weaken exact behavioral equivalence to sampled lookup checks.
+* Do not treat provider agreement as truth.
+* Do not add a secondary source to production output before comparison,
+  licensing review, and deterministic conflict policy exist.
+
+## Publication invariants
+
+* Use a temporary publication file beside the destination when atomic rename is
+  required.
+* Before the atomic publication commit, every failure must preserve the existing
+  published artifact.
+* The successful rename is the publication commit point.
+* After the rename succeeds, later reporting, stdout, or cancellation failure
+  must not roll back or delete the installed artifact.
+* Verify the exact temporary artifact before rename.
+* Determine unchanged publication through exact byte comparison, not checksum
+  equality alone.
+* Treat SHA-256 as artifact evidence, not as a replacement for exact comparison.
+* Do not create backups, rollback state, retention history, or sidecar files
+  unless explicitly requested.
+* Do not delete a candidate merely because publication succeeds.
+* Do not claim full directory-entry power-loss durability unless it is
+  implemented and tested.
+
+## Filesystem and data safety
+
+* Use task-owned temporary directories for generated test and validation data.
+* Do not recursively delete a path inferred from an untrusted string.
+* Remove only paths whose ownership was established by the current operation.
+* Prefer root-relative filesystem operations and explicit file-identity checks
+  at trust-sensitive boundaries.
+* Reject symbolic links and non-regular files where the operation requires a
+  stable regular-file snapshot.
+* Use exclusive creation for temporary or candidate files where collisions
+  matter.
+* Keep generated distribution output under ignored `dist/`.
+* Keep private MMDB sources and temporary operator workspaces under ignored
+  `tmp/`.
+* Never stage or commit licensed production MMDB data.
+
+Tracked tests and default validation must use temporary directories and
+synthetic or approved fixtures. They must not require licensed production data.
+
+Opt-in local validation may use an explicitly authorized, Git-ignored production
+MMDB. It must:
+
+* skip cleanly when the opt-in input is absent;
+* avoid copying, renaming, modifying, redistributing, staging, or committing it;
+* avoid revealing the complete private source path;
+* avoid hardcoding changing source checksums, sizes, epochs, or record counts in
+  tracked assertions;
+* clean all generated candidates, profiles, traces, and workspaces.
+
+## Secrets and diagnostic safety
+
+Do not log or expose:
+
+* credentials;
+* account identifiers;
+* licence keys;
+* authenticated URLs;
+* private source paths;
+* production source archives;
+* raw MMDB contents;
+* decoded record dumps;
+* parser offsets that expose unnecessary internals;
+* real client IP samples;
+* untrusted argument values without validation and redaction.
+
+Successful commands may report explicitly requested output artifact paths.
+
+Tests and documentation may use reserved documentation ranges or well-known
+public test addresses where appropriate.
+
+Preserve useful classifications with `errors.Is`, but do not expose unsafe raw
+causes merely to improve diagnostics.
+
+Prefer:
+
+* a stable error classification;
+* a safe default diagnostic;
+* a sanitized cause where available;
+* optional bounded detail when a reviewed detailed-output mode exists.
+
+Do not discard safe standard classifications such as missing-file or permission
+errors without a concrete reason.
+
+## Go conventions
+
+* Use the Go version declared by `go.mod`.
+* Keep `cmd/stategeodb` and `main` minimal.
+* Keep argument parsing and output formatting in `internal/cli`.
+* Keep domain behavior independently testable outside the CLI.
+* Use `net/netip` for IP addresses and prefixes.
+* Propagate `context.Context` through blocking or cancellable operations.
+* Do not add context parameters to operations that cannot meaningfully observe
+  cancellation.
+* Do not spawn goroutines merely to simulate cancellation around a synchronous
+  dependency call.
+* Use explicit ownership for files, readers, workspaces, and candidates.
+* Prefer value types for immutable data and pointer ownership for resources.
+* Prefer constructors and boundary validation for normalized data.
+* Prefer narrow concrete APIs over speculative interfaces.
+* Add an interface only when there are multiple real implementations or a
+  concrete test boundary that cannot remain unexported.
+* Prefer the standard library.
+* Add production dependencies only for a concrete correctness, security,
+  maintenance, or ownership advantage.
+* Avoid mutable package-global build or command state.
+* Each invocation owns its inputs, context, workspace, resources, and result.
+* Do not use finalizers for correctness or cleanup.
+* Do not call `os.Exit` below `main`; return statuses or errors so cleanup runs.
+* Avoid reflection for cases that can be prevented through clear internal API
+  ownership.
+* Avoid clever abstractions that reduce line count while obscuring lifecycle,
+  trust, or error behavior.
+
+## CLI conventions
+
+* Keep commands non-interactive and suitable for unattended automation.
+* Preserve the current explicit command inputs unless a reviewed configuration
+  system is introduced.
+* Do not infer paths, source identity, build epoch, or publication destinations
+  from the working directory, filenames, environment, or current time unless
+  the command contract explicitly documents that behavior.
+* Write stable command results and help to stdout.
+* Write diagnostics to stderr.
+* Successful machine-consumable output must be deterministic and documented.
+* Failed commands must not emit misleading normal results.
+* Build complete bounded output before writing when partial successful output
+  would be unsafe or ambiguous.
+* Preserve the current process contract:
+
+  * `0`: success;
+  * `1`: failure.
+* Broaden exit statuses only when a concrete automation requirement justifies a
+  stable taxonomy.
+* Do not require scripts to parse unstable upstream error text.
+* Keep physical artifact-encoding options out of the operator CLI unless a real
+  consumer needs them.
+
+## Skills and research
+
+All enabled skills remain available through their trigger descriptions. Load
+only the smallest set that matches the task.
+
+Typical routing:
+
+* CLI contracts: `golang-cli`.
+* Unit, integration, fixture, fuzz, race, or flaky tests: `golang-testing`.
+* Cancellation and context boundaries: `golang-context`.
+* Errors and diagnostics: `golang-error-handling`.
+* Filesystem boundaries, untrusted input, publication, secrets, or licensing:
+  `golang-security` and, where relevant, `golang-safety`.
+* Semantic navigation and safe refactoring: `golang-gopls` and
+  `golang-refactoring`.
+* Performance or memory investigation: `golang-benchmark` first, followed by
+  `golang-performance` after identifying a measured bottleneck.
+* Module or dependency changes: `golang-dependency-management`.
+* Project structure: `golang-project-layout`.
+* Public or package documentation: `golang-documentation`.
+
+Other installed skills may trigger when their descriptions match.
+
+Do not invoke every Go skill by default.
+
+Do not force database, gRPC, Fx, observability, CI, container, or Kubernetes
+skills onto unrelated work.
+
+Prefer evidence in this order:
+
+1. current production code and tests;
+2. `gopls` and local Go tooling;
+3. pinned dependency source and tests;
+4. official Go or upstream documentation;
+5. Context7 or web research when current external verification is necessary.
+
+When external verification is necessary and the tool is available, use Context7
+or web search for current, version-sensitive, unfamiliar, or externally defined
+behavior that cannot be resolved locally.
+
+Prefer primary sources.
+
+If external tooling is unavailable or incomplete, use the strongest local or
+upstream source available and report the limitation honestly.
+
+Do not claim a tool, skill, source, or review was used when it was not.
+
+## Subagents
+
+Default documentation changes, routine fixes, and narrow low-risk package work
+to the primary agent only.
+
+Use a specialist only when the task materially exercises that specialty or when
+independent review would reduce a concrete risk.
+
+Available read-only specialists:
+
+* `go_reviewer`: correctness, compatibility, error handling, API contracts, and
+  missing tests.
+* `go_concurrency`: goroutines, cancellation, synchronization, resource
+  ownership, and lifecycle.
+* `go_security`: untrusted input, filesystem boundaries, secrets, licensing,
+  publication, and data handling.
+* `go_performance`: measured compiler, MMDB, allocation, memory, and benchmark
+  behavior.
+
+Rules:
+
+* Do not run all four by default.
+* Select only relevant specialists.
+* Give each selected agent one bounded, self-contained review or investigation.
+* Do not use subagents to duplicate primary-agent implementation.
+* Do not allow multiple agents to edit shared files concurrently.
+* Subagents remain read-only; the primary agent owns all edits.
+* Do not ask subagents to delegate further.
+* For implementation tasks, normally complete implementation and focused
+  validation before requesting specialist final review.
+* For investigation-only tasks, read-heavy specialist analysis may run earlier
+  when it reduces uncertainty.
+* Wait for selected agents before finalizing.
+* Consolidate findings in the primary thread.
+* If a finding is corrected, rerun only the relevant reviewer when confirmation
+  is materially useful.
+* A specialist may report that no actionable issue exists.
+* Do not manufacture findings or work merely to demonstrate delegation.
+
+## Testing conventions
+
+* Test externally meaningful behavior rather than private implementation shape.
+* Use table-driven tests when they make contracts clearer.
+* Preserve `errors.Is` classifications in tests.
+* Test failure cleanup, cancellation, ownership, and repeated invocation where
+  relevant.
+* Avoid timing-dependent sleeps when deterministic seams can model the
+  boundary.
+* Do not add mutable package-global test hooks.
+* Keep test seams unexported where possible.
+* Do not duplicate complete lower-layer test suites in integration packages.
+* Add regression tests for every corrected material defect.
+* Test deterministic output across separate processes when process state could
+  affect bytes.
+* Test atomic publication at the commit boundary.
+* Do not weaken adversarial filesystem tests without documenting the changed
+  threat model.
+* Do not add benchmarks without a defined workload and metric.
+* Do not convert benchmark observations into pass/fail latency thresholds
+  without a concrete service-level requirement.
+* Distinguish:
+
+  * cumulative allocated bytes;
+  * live Go heap;
+  * process RSS;
+  * peak resident memory;
+  * mapped file pages.
+
+Do not describe `B/op` as peak memory.
+
+## Validation
+
+Run validation proportional to the change.
+
+During implementation:
+
+* format changed Go files explicitly;
+* run focused tests for changed packages;
+* use `make fmt-check` as the non-mutating formatting check;
+* run focused race tests when lifecycle, shared state, or cancellation changes;
+* run focused integration or adversarial tests when filesystem or publication
+  behavior changes.
+
+Before completing non-trivial Go changes:
 
 ```text
-find . \( -path './.git' -o -path './bin' -o -path './dist' -o -path './tmp' -o -path './work' \) -prune -o -type f -name '*.go' -exec gofmt -l {} +
-go mod tidy -diff
-go list -m all
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
-if [ -L dist ] || [ -L dist/bin ] || [ -L dist/bin/stategeodb ]; then
-  printf '%s\n' 'refusing to build through a symlink' >&2
-  false
-else
-  mkdir -p dist/bin
-  go build -o dist/bin/stategeodb ./cmd/stategeodb
-fi
+make check
 ```
 
-Use `make fmt` or `gofmt -w` as an explicit editing step, never as an acceptance
-check. Also run focused tests, fuzz targets, integration fixtures, or benchmarks
-when work changes prefix traversal, merging, MMDB encoding, filesystem
-publication, concurrency, or memory use.
+`make check` is the preferred convenience entry point. Its underlying Go
+commands remain authoritative.
 
-Completed implementation work must report behavior, files and public interfaces
-changed, exact validation commands and results, benchmark or artifact-size
-changes when relevant, and unresolved risks with the next safe task. Do not
-claim equivalence, determinism, atomicity, or memory improvement without a test
-or measurement supporting the claim.
+Also run additional focused validation when the change affects:
 
-## Go implementation workflow
+* determinism;
+* artifact compatibility;
+* source/output equivalence;
+* publication atomicity;
+* private-data boundaries;
+* real-dataset behavior;
+* benchmarks or memory claims.
 
-- Invoke every applicable installed Go skill before making or reviewing Go
-  implementation decisions.
-- For implementation tasks, the primary agent must inspect and design the
-  change, implement all code and tests itself, and run focused and repository
-  validation before invoking the final read-only review batch.
-- Use these exact Go subagents once as the final review batch when they are
-  present: `go_reviewer` for correctness and compatibility, `go_concurrency`
-  for lifecycle and synchronization, `go_security` for trust boundaries, and
-  `go_performance` for measured efficiency. Give each agent a distinct task
-  aligned with its configured specialty. An agent may report no actionable
-  findings. Do not substitute, rename, invent, or repeatedly spawn the full
-  group.
-- The primary agent owns all implementation edits and consolidation. If a final
-  reviewer finds an actionable issue, the primary agent makes the correction,
-  reruns affected tests and validation, and may rerun only the reviewer whose
-  material finding requires confirmation, at most once.
-- Consult Context7 for current, version-sensitive, or unfamiliar Go and
-  dependency APIs, and prefer primary or upstream documentation.
-- Report the skills, subagents, and Context7 documentation actually used when a
-  task is completed. Report unavailable tooling honestly.
-- Keep tool use relevant to the active work and do not materially expand its
-  scope.
+Documentation-only changes do not require the full Go suite unless:
 
-## Documentation ownership and Git
+* command examples changed;
+* code-generated output is documented;
+* a current-behavior claim needs execution to verify;
+* repository validation rules require it.
 
-- Update `README.md` when current user-facing behavior, commands, requirements,
-  or limitations change.
-- Update `docs/ARCHITECTURE.md` when implemented component ownership, contracts,
-  trust boundaries, or durable decisions change.
-- Update `docs/ROADMAP.md` when public direction or priority changes; do not use
-  it as a task journal.
-- Update `testdata/README.md` only when fixture provenance or licensing changes.
-- Package comments, exported API documentation, tests, and fixture provenance
-  remain allowed during implementation. Do not rewrite the main public docs for
-  unrelated code work.
-- Preserve user changes and unrelated worktree state. Do not stage, commit,
-  tag, push, or create releases unless explicitly requested.
+Do not silently format code as part of acceptance validation.
 
-## Task completion reports
+If a relevant check cannot run:
 
-- Target at most 1,200 words unless a failure requires additional evidence.
-- Report decisions and evidence, not a chronological work log.
-- Do not paste complete successful test output, complete module graphs, raw
-  coverage output, or exhaustive fixture tables unless directly changed.
-- Include exact failure output for any required command that fails.
-- Include enough information to reconstruct the public or cross-package API and
-  judge the acceptance criteria.
-- Unless a user supplies another required format, use these sections: `Result`,
-  `Implementation`, `Tests and validation`, `Final subagent review`, and `Scope,
-  risks, and next task`.
+* report the exact command;
+* report the exact reason;
+* distinguish code failure from sandbox, cache, network, permission, platform,
+  or tooling limitations;
+* do not imply the check passed.
+
+Report only validation that actually ran.
+
+## Documentation ownership
+
+Update documentation only when its owned contract changes:
+
+* `README.md`: user-visible behavior, prerequisites, commands, workflow, and
+  limitations.
+* `docs/ARCHITECTURE.md`: implemented ownership, artifact contracts, trust
+  boundaries, verification, determinism, performance model, and publication
+  guarantees.
+* `docs/ROADMAP.md`: durable future direction and priority.
+* `testdata/README.md`: fixture provenance, licensing, checksums, and fixture
+  purpose.
+
+Do not:
+
+* use public documentation as an implementation journal;
+* add task-by-task completion history;
+* recreate private phase-tracking files;
+* document planned functionality as implemented;
+* broadly rewrite unrelated documentation during a narrow code change;
+* add changing private-source measurements to tracked documentation unless they
+  are intentionally generalized and reviewed.
+
+Implementation prompts, tool logs, and acceptance evidence remain task artifacts
+unless explicitly promoted into a durable public document or issue.
+
+Use these labels accurately:
+
+* implemented;
+* not implemented;
+* planned;
+* outside this repository.
+
+## Completion reports
+
+Keep completion reports concise and evidence-based.
+
+Include:
+
+* result;
+* material behavior, interface, or contract changes;
+* files or packages changed;
+* validation actually performed;
+* relevant specialist findings;
+* remaining risks, limitations, or follow-up work.
+
+Do not include:
+
+* chronological tool activity;
+* complete successful logs;
+* full module graphs without a dependency conflict;
+* repeated acceptance criteria;
+* claims that a command passed when it did not run;
+* hidden reasoning.
+
+State failures and unresolved criteria directly.
+
+Distinguish implementation defects from environment or tooling limitations.
