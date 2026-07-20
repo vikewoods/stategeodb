@@ -1241,17 +1241,6 @@ func expectedMetadata(buildEpoch int64) maxminddb.Metadata {
 	}
 }
 
-func TestMetadataMatchesRequiresCurrentCompilerEncoding(t *testing.T) {
-	metadata := expectedMetadata(testBuildEpoch)
-	if !metadataMatches(metadata, testBuildEpoch) {
-		t.Fatal("metadataMatches(current) = false")
-	}
-	metadata.RecordSize = mmdb.LegacyRecordSize
-	if metadataMatches(metadata, testBuildEpoch) {
-		t.Fatal("metadataMatches(legacy) = true")
-	}
-}
-
 func assertCandidateMetadata(t *testing.T, metadata maxminddb.Metadata, buildEpoch int64) {
 	t.Helper()
 	if !metadataMatches(metadata, buildEpoch) {

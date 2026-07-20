@@ -188,6 +188,7 @@ func TestRun_BuildRejectsInvalidArguments(t *testing.T) {
 		{name: "negative build epoch", args: replaceBuildFlag(valid, "--build-epoch", "-1")},
 		{name: "positional argument", args: appendCopy(valid, "extra")},
 		{name: "unknown flag", args: appendCopy(valid, "--token=top-secret"), sensitive: "top-secret"},
+		{name: "record size flag", args: appendCopy(valid, "--record-size=28")},
 		{name: "argument separator", args: appendCopy(valid, "--")},
 		{name: "help with extra argument", args: []string{"build", "--help", "top-secret"}, sensitive: "top-secret"},
 		{name: "missing flag value", args: []string{"build", "--source"}},

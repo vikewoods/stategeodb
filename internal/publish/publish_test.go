@@ -26,7 +26,10 @@ import (
 	"github.com/vikewoods/stategeodb/internal/source"
 )
 
-const testBuildEpoch int64 = 1_700_000_321
+const (
+	testBuildEpoch   int64 = 1_700_000_321
+	legacyRecordSize       = 28
+)
 
 func TestPublish_CreatesVerifiedDestination(t *testing.T) {
 	candidateDirectory := t.TempDir()
@@ -71,16 +74,15 @@ func TestPublish_CreatesVerifiedDestination(t *testing.T) {
 	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
 }
 
-func TestPublish_CreatesDestinationFromLegacyCandidate(t *testing.T) {
+func TestPublish_RejectsLegacyCandidateWithAbsentDestination(t *testing.T) {
 	candidateDirectory := t.TempDir()
 	destinationDirectory := t.TempDir()
-	candidate := writeCompatibleCandidate(
+	candidate := writeLegacyCandidate(
 		t,
 		candidateDirectory,
 		"candidate.mmdb",
 		testBuildEpoch,
 		"US",
-		mmdb.LegacyRecordSize,
 	)
 	destination := filepath.Join(destinationDirectory, "stategeo.mmdb")
 	candidateBefore := readFile(t, candidate)
@@ -89,31 +91,15 @@ func TestPublish_CreatesDestinationFromLegacyCandidate(t *testing.T) {
 		CandidatePath:   candidate,
 		DestinationPath: destination,
 	})
-	if err != nil {
-		t.Fatalf("Publish() error = %v", err)
+	if result != (Result{}) || !errors.Is(err, ErrVerify) ||
+		!errors.Is(err, artifact.ErrUnsupported) {
+		t.Errorf("Publish() = %+v/%v, want zero/ErrVerify/ErrUnsupported", result, err)
 	}
-	if result.Action != ActionCreated {
-		t.Errorf("Publish() action = %q, want %q", result.Action, ActionCreated)
-	}
-	if !bytes.Equal(readFile(t, destination), candidateBefore) {
-		t.Error("destination bytes differ from legacy candidate")
-	}
-	inspection, err := inspect.Inspect(
-		t.Context(),
-		inspect.Request{DatabasePath: destination},
-	)
-	if err != nil {
-		t.Fatalf("Inspect(destination) error = %v", err)
-	}
-	if inspection.Metadata.RecordSize != mmdb.LegacyRecordSize {
-		t.Errorf(
-			"destination record size = %d, want %d",
-			inspection.Metadata.RecordSize,
-			mmdb.LegacyRecordSize,
-		)
+	if _, statErr := os.Lstat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("Lstat(destination) error = %v, want os.ErrNotExist", statErr)
 	}
 	assertCandidateUnchanged(t, candidate, candidateBefore)
-	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
+	assertNoPublicationArtifacts(t, destinationDirectory)
 }
 
 func TestPublish_IdenticalDestinationIsUnchanged(t *testing.T) {
@@ -157,71 +143,6 @@ func TestPublish_IdenticalDestinationIsUnchanged(t *testing.T) {
 	}
 	if !after.ModTime().Equal(before.ModTime()) || after.Mode() != before.Mode() {
 		t.Errorf("destination metadata changed: before=%v/%v after=%v/%v", before.ModTime(), before.Mode(), after.ModTime(), after.Mode())
-	}
-	assertCandidateUnchanged(t, candidate, candidateBefore)
-	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
-}
-
-func TestPublish_ReplacesLegacyEncodingThenBecomesUnchanged(t *testing.T) {
-	candidateDirectory := t.TempDir()
-	destinationDirectory := t.TempDir()
-	candidate := writeCandidate(
-		t,
-		candidateDirectory,
-		"candidate.mmdb",
-		testBuildEpoch,
-		"US",
-	)
-	destination := writeCompatibleCandidate(
-		t,
-		destinationDirectory,
-		"stategeo.mmdb",
-		testBuildEpoch,
-		"US",
-		mmdb.LegacyRecordSize,
-	)
-	candidateBefore := readFile(t, candidate)
-	if bytes.Equal(candidateBefore, readFile(t, destination)) {
-		t.Fatal("current and legacy encodings produced identical bytes")
-	}
-
-	result, err := Publish(t.Context(), Request{
-		CandidatePath:   candidate,
-		DestinationPath: destination,
-	})
-	if err != nil {
-		t.Fatalf("first Publish() error = %v", err)
-	}
-	if result.Action != ActionReplaced {
-		t.Errorf("first Publish() action = %q, want %q", result.Action, ActionReplaced)
-	}
-	if !bytes.Equal(readFile(t, destination), candidateBefore) {
-		t.Error("replacement bytes differ from current candidate")
-	}
-	inspection, err := inspect.Inspect(
-		t.Context(),
-		inspect.Request{DatabasePath: destination},
-	)
-	if err != nil {
-		t.Fatalf("Inspect(replacement) error = %v", err)
-	}
-	if inspection.Metadata.RecordSize != mmdb.RecordSize {
-		t.Errorf(
-			"replacement record size = %d, want %d",
-			inspection.Metadata.RecordSize,
-			mmdb.RecordSize,
-		)
-	}
-
-	result, err = Publish(t.Context(), Request{
-		CandidatePath:   candidate,
-		DestinationPath: destination,
-	})
-	if err != nil {
-		t.Fatalf("second Publish() error = %v", err)
-	}
-	if result.Action != ActionUnchanged {
-		t.Errorf("second Publish() action = %q, want %q", result.Action, ActionUnchanged)
 	}
 	assertCandidateUnchanged(t, candidate, candidateBefore)
 	assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
@@ -835,6 +756,15 @@ func TestPublish_RejectsInvalidCandidateWithoutChangingDestination(t *testing.T)
 		{name: "source city", candidate: func(_ *testing.T, _ string) string {
 			return filepath.Join("..", "..", "testdata", "maxmind", "GeoIP2-City-Test.mmdb")
 		}, expected: ErrVerify, secondary: artifact.ErrUnsupported},
+		{name: "legacy record size", candidate: func(t *testing.T, directory string) string {
+			return writeLegacyCandidate(
+				t,
+				directory,
+				"candidate.mmdb",
+				testBuildEpoch,
+				"US",
+			)
+		}, expected: ErrVerify, secondary: artifact.ErrUnsupported},
 		{name: "incompatible schema", candidate: incompatibleCandidate, expected: ErrVerify, secondary: artifact.ErrUnsupported},
 		{name: "wrong country type", candidate: func(t *testing.T, directory string) string {
 			return runtimeIncompatibleCandidate(t, directory, mmdbtype.Map{
@@ -863,8 +793,16 @@ func TestPublish_RejectsInvalidCandidateWithoutChangingDestination(t *testing.T)
 			candidateDirectory := t.TempDir()
 			destinationDirectory := t.TempDir()
 			candidate := test.candidate(t, candidateDirectory)
+			var candidateBefore []byte
+			if test.name == "legacy record size" {
+				candidateBefore = readFile(t, candidate)
+			}
 			destination := writeCandidate(t, destinationDirectory, "stategeo.mmdb", testBuildEpoch, "US")
 			destinationBefore := readFile(t, destination)
+			destinationInfoBefore, statErr := os.Stat(destination)
+			if statErr != nil {
+				t.Fatalf("Stat(destination) error = %v", statErr)
+			}
 			_, err := Publish(t.Context(), Request{CandidatePath: candidate, DestinationPath: destination})
 			if !errors.Is(err, test.expected) {
 				t.Errorf("Publish() error = %v, want errors.Is(%v)", err, test.expected)
@@ -874,6 +812,16 @@ func TestPublish_RejectsInvalidCandidateWithoutChangingDestination(t *testing.T)
 			}
 			if !bytes.Equal(readFile(t, destination), destinationBefore) {
 				t.Error("rejected candidate changed destination")
+			}
+			destinationInfoAfter, statErr := os.Stat(destination)
+			if statErr != nil {
+				t.Fatalf("Stat(destination after) error = %v", statErr)
+			}
+			if !os.SameFile(destinationInfoBefore, destinationInfoAfter) {
+				t.Error("rejected candidate replaced destination identity")
+			}
+			if candidateBefore != nil {
+				assertCandidateUnchanged(t, candidate, candidateBefore)
 			}
 			assertNoPublicationArtifacts(t, destinationDirectory, "stategeo.mmdb")
 		})
@@ -974,13 +922,12 @@ func writeCandidate(t *testing.T, directory, name string, epoch int64, country s
 	return path
 }
 
-func writeCompatibleCandidate(
+func writeLegacyCandidate(
 	t *testing.T,
 	directory string,
 	name string,
 	epoch int64,
 	country string,
-	recordSize int,
 ) string {
 	t.Helper()
 	tree, err := mmdbwriter.New(mmdbwriter.Options{
@@ -990,7 +937,7 @@ func writeCompatibleCandidate(
 		IncludeReservedNetworks: true,
 		IPVersion:               6,
 		Languages:               []string{},
-		RecordSize:              recordSize,
+		RecordSize:              legacyRecordSize,
 	})
 	if err != nil {
 		t.Fatalf("mmdbwriter.New() error = %v", err)
@@ -1025,7 +972,7 @@ func incompatibleCandidate(t *testing.T, directory string) string {
 		IncludeReservedNetworks: true,
 		IPVersion:               6,
 		Languages:               []string{},
-		RecordSize:              28,
+		RecordSize:              mmdb.RecordSize,
 	})
 	if err != nil {
 		t.Fatalf("mmdbwriter.New() error = %v", err)
@@ -1062,7 +1009,7 @@ func runtimeIncompatibleCandidate(
 		IncludeReservedNetworks: true,
 		IPVersion:               6,
 		Languages:               []string{},
-		RecordSize:              28,
+		RecordSize:              mmdb.RecordSize,
 	})
 	if err != nil {
 		t.Fatalf("mmdbwriter.New() error = %v", err)

@@ -20,7 +20,10 @@ import (
 	"github.com/vikewoods/stategeodb/internal/source"
 )
 
-const testBuildEpoch int64 = 1_700_000_123
+const (
+	testBuildEpoch   int64 = 1_700_000_123
+	legacyRecordSize       = 28
+)
 
 func TestInspect_MetadataAndBoundedLookups(t *testing.T) {
 	path := writeProjectDatabase(t)
@@ -76,24 +79,17 @@ func TestInspect_MetadataOnly(t *testing.T) {
 	}
 }
 
-func TestInspect_ReportsLegacyRecordSize(t *testing.T) {
+func TestInspect_RejectsLegacyRecordSize(t *testing.T) {
 	path := writeCustomDatabase(
 		t,
 		mmdb.DatabaseType,
 		mmdb.SchemaDescription,
 		"US",
-		mmdb.LegacyRecordSize,
+		legacyRecordSize,
 	)
 	result, err := Inspect(t.Context(), Request{DatabasePath: path})
-	if err != nil {
-		t.Fatalf("Inspect() error = %v", err)
-	}
-	if result.Metadata.RecordSize != mmdb.LegacyRecordSize {
-		t.Errorf(
-			"RecordSize = %d, want %d",
-			result.Metadata.RecordSize,
-			mmdb.LegacyRecordSize,
-		)
+	if !errors.Is(err, ErrUnsupported) || errors.Is(err, ErrCorrupt) {
+		t.Errorf("Inspect() result/error = %+v/%v, want zero/only ErrUnsupported", result, err)
 	}
 }
 

@@ -179,7 +179,7 @@ Generated metadata and the logical schema identity are fixed as follows:
 | Build epoch | caller-supplied positive Unix timestamp |
 | Binary format | `2.0` |
 | IP version | `6` |
-| Record size | `24` for new output; legacy schema-v1 `28` is accepted by inspect and publish |
+| Record size | `24` (fixed and not operator configurable) |
 | Languages | empty |
 
 Node count must be positive. The logical source ID is excluded from runtime
@@ -189,12 +189,11 @@ package constant. An incompatible runtime-record change requires a new database
 type; a compatible revision retains the type and advances the logical version
 and description together.
 
-The current artifact verifier accepts record size 24 and legacy record size 28
-for otherwise exact schema-v1 artifacts. The compiler requires record size 24
-for all new output. The verifier decodes and validates the required normalized
-fields in every record but does not prove that unknown map fields or additional
-subdivision elements are absent. Publication therefore assumes candidates come
-from a trusted `stategeodb build` workflow.
+The artifact verifier requires record size 24 for schema-v1 artifacts. The
+verifier decodes and validates the required normalized fields in every record
+but does not prove that unknown map fields or additional subdivision elements
+are absent. Publication therefore assumes candidates come from a trusted
+`stategeodb build` workflow.
 
 ## Build and equivalence lifecycle
 

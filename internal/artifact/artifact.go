@@ -21,10 +21,8 @@ var (
 )
 
 // Compatible reports whether metadata exactly matches the supported
-// stategeodb schema-v1 contract, including its current or legacy encoding.
+// stategeodb schema-v1 and physical encoding contract.
 func Compatible(metadata maxminddb.Metadata) bool {
-	supportedRecordSize := metadata.RecordSize == mmdb.RecordSize ||
-		metadata.RecordSize == mmdb.LegacyRecordSize
 	return metadata.DatabaseType == mmdb.DatabaseType &&
 		len(metadata.Description) == 1 &&
 		metadata.Description["en"] == mmdb.SchemaDescription &&
@@ -33,14 +31,8 @@ func Compatible(metadata maxminddb.Metadata) bool {
 		metadata.BinaryFormatMajorVersion == 2 &&
 		metadata.BinaryFormatMinorVersion == 0 &&
 		metadata.IPVersion == 6 &&
-		supportedRecordSize &&
+		metadata.RecordSize == mmdb.RecordSize &&
 		metadata.NodeCount > 0
-}
-
-// CurrentCompilerOutput reports whether metadata matches the exact encoding
-// contract required for newly compiled artifacts.
-func CurrentCompilerOutput(metadata maxminddb.Metadata) bool {
-	return Compatible(metadata) && metadata.RecordSize == mmdb.RecordSize
 }
 
 // Verify validates exact project metadata, performs upstream complete

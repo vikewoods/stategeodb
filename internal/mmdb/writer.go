@@ -20,9 +20,6 @@ const (
 	SchemaVersion = 1
 	// RecordSize is the search-tree record size used for newly generated artifacts.
 	RecordSize = 24
-	// LegacyRecordSize is the supported schema-v1 search-tree record size used
-	// by artifacts generated before the current encoding contract.
-	LegacyRecordSize = 28
 	// DatabaseType identifies the runtime record shape. Incompatible runtime
 	// record changes require a new database type.
 	DatabaseType = "StateGeo-Country-Subdivision"

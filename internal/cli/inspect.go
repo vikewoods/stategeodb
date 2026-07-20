@@ -168,15 +168,13 @@ func formatInspectOutput(result inspect.Result) (string, bool) {
 
 func validInspectResult(result inspect.Result) bool {
 	metadata := result.Metadata
-	supportedRecordSize := metadata.RecordSize == mmdb.RecordSize ||
-		metadata.RecordSize == mmdb.LegacyRecordSize
 	if metadata.DatabaseType != mmdb.DatabaseType ||
 		metadata.SchemaVersion != mmdb.SchemaVersion ||
 		metadata.BuildEpoch == 0 ||
 		metadata.BinaryFormatMajor != 2 ||
 		metadata.BinaryFormatMinor != 0 ||
 		metadata.IPVersion != 6 ||
-		!supportedRecordSize ||
+		metadata.RecordSize != mmdb.RecordSize ||
 		metadata.NodeCount == 0 ||
 		len(result.Lookups) > maxInspectLookups {
 		return false

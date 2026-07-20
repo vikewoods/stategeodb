@@ -545,7 +545,7 @@ func verifyCandidate(
 }
 
 func metadataMatches(metadata maxminddb.Metadata, buildEpoch int64) bool {
-	return artifact.CurrentCompilerOutput(metadata) &&
+	return artifact.Compatible(metadata) &&
 		uint64(metadata.BuildEpoch) == uint64(buildEpoch)
 }
 

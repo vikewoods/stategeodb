@@ -58,6 +58,7 @@ func TestParsePublishArguments(t *testing.T) {
 		{"--candidate", "candidate.mmdb", "--destination", "one", "--destination", "two"},
 		{"--candidate", "candidate.mmdb", "--destination", "stable.mmdb", "extra"},
 		{"--candidate", "candidate.mmdb", "--destination", "stable.mmdb", "--unknown"},
+		{"--candidate", "candidate.mmdb", "--destination", "stable.mmdb", "--record-size", "28"},
 		{"--candidate", "candidate.mmdb", "--destination", "stable.mmdb", "--"},
 		{"--candidate", "candidate.mmdb", "--destination", "stable\nforged.mmdb"},
 	}

@@ -154,6 +154,9 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 			if !ok {
 				t.Fatalf("findCommand(%q) returned nil", test.name)
 			}
+			if strings.Contains(cmd.help, "record-size") {
+				t.Errorf("%s help documents selectable record size", test.name)
+			}
 			for _, content := range test.contains {
 				if !strings.Contains(cmd.help, content) {
 					t.Errorf("%s help does not contain %q", test.name, content)

@@ -43,6 +43,7 @@ func TestParseInspectArguments(t *testing.T) {
 		{"--database", "database.mmdb", "--ip", "fe80::1%eth0"},
 		{"--database", "database.mmdb", "positional"},
 		{"--database", "database.mmdb", "--unknown"},
+		{"--database", "database.mmdb", "--record-size", "28"},
 		{"--database", "database.mmdb", "--"},
 	}
 	tooMany := []string{"--database", "database.mmdb"}
@@ -148,21 +149,13 @@ func TestRunInspect_MetadataOnly(t *testing.T) {
 	}
 }
 
-func TestFormatInspectOutput_LegacyRecordSize(t *testing.T) {
+func TestFormatInspectOutput_RejectsUnsupportedRecordSizes(t *testing.T) {
 	result := validInspectResultFixture()
-	result.Metadata.RecordSize = mmdb.LegacyRecordSize
-	output, ok := formatInspectOutput(result)
-	if !ok {
-		t.Fatal("formatInspectOutput() rejected legacy record size")
-	}
-	expected := "record_size=" + strconv.Itoa(mmdb.LegacyRecordSize) + "\n"
-	if !strings.Contains(output, expected) {
-		t.Errorf("formatInspectOutput() = %q, want %q", output, expected)
-	}
-
-	result.Metadata.RecordSize = 32
-	if _, ok := formatInspectOutput(result); ok {
-		t.Error("formatInspectOutput() accepted unsupported record size")
+	for _, recordSize := range []uint{28, 32} {
+		result.Metadata.RecordSize = recordSize
+		if _, ok := formatInspectOutput(result); ok {
+			t.Errorf("formatInspectOutput() accepted record size %d", recordSize)
+		}
 	}
 }
 

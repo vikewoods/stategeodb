@@ -12,6 +12,8 @@ import (
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 )
 
+const legacyRecordSize = 28
+
 func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 	valid := maxminddb.Metadata{
 		Description:              map[string]string{"en": mmdb.SchemaDescription},
@@ -22,31 +24,11 @@ func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 		BuildEpoch:               1,
 		IPVersion:                6,
 		NodeCount:                1,
+		RecordSize:               mmdb.RecordSize,
 	}
-	for _, test := range []struct {
-		name                  string
-		recordSize            uint
-		currentCompilerOutput bool
-	}{
-		{name: "current", recordSize: mmdb.RecordSize, currentCompilerOutput: true},
-		{name: "legacy", recordSize: mmdb.LegacyRecordSize},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			metadata := valid
-			metadata.RecordSize = test.recordSize
-			if !Compatible(metadata) {
-				t.Error("Compatible(metadata) = false")
-			}
-			if actual := CurrentCompilerOutput(metadata); actual != test.currentCompilerOutput {
-				t.Errorf(
-					"CurrentCompilerOutput(metadata) = %t, want %t",
-					actual,
-					test.currentCompilerOutput,
-				)
-			}
-		})
+	if !Compatible(valid) {
+		t.Fatal("Compatible(valid) = false")
 	}
-	valid.RecordSize = mmdb.RecordSize
 
 	tests := []struct {
 		name   string
@@ -61,7 +43,8 @@ func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 		{name: "build epoch", mutate: func(metadata *maxminddb.Metadata) { metadata.BuildEpoch = 0 }},
 		{name: "IP version", mutate: func(metadata *maxminddb.Metadata) { metadata.IPVersion = 4 }},
 		{name: "node count", mutate: func(metadata *maxminddb.Metadata) { metadata.NodeCount = 0 }},
-		{name: "record size", mutate: func(metadata *maxminddb.Metadata) { metadata.RecordSize = 32 }},
+		{name: "legacy record size", mutate: func(metadata *maxminddb.Metadata) { metadata.RecordSize = legacyRecordSize }},
+		{name: "32-bit record size", mutate: func(metadata *maxminddb.Metadata) { metadata.RecordSize = 32 }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -75,15 +58,15 @@ func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 	}
 }
 
-func TestVerify_AcceptsCurrentAndLegacyEncoding(t *testing.T) {
+func TestVerify_RequiresCurrentEncoding(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		recordSize int
 		expected   error
 	}{
 		{name: "current", recordSize: mmdb.RecordSize},
-		{name: "legacy", recordSize: mmdb.LegacyRecordSize},
-		{name: "unsupported", recordSize: 32, expected: ErrUnsupported},
+		{name: "legacy", recordSize: legacyRecordSize, expected: ErrUnsupported},
+		{name: "32-bit", recordSize: 32, expected: ErrUnsupported},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reader := projectReader(t, test.recordSize)
