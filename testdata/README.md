@@ -25,7 +25,7 @@ an exact `.gitignore` allow-list entry; broad MMDB exceptions are prohibited.
 
 ## Binary fixture inventory
 
-Phase 1.2 uses the following three upstream fixtures. They come from
+The repository uses the following three upstream fixtures. They come from
 [`maxmind/MaxMind-DB`](https://github.com/maxmind/MaxMind-DB) commit
 `40d0b4ff0ffdad191e83bd8045b780dd052650e0`, the exact test-data submodule
 revision referenced by `maxminddb-golang` `v2.4.1`. MaxMind-DB offers these

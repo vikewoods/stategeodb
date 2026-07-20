@@ -20,7 +20,7 @@ const (
 var (
 	// ErrInvalidRequest classifies missing or unsafe publication paths.
 	ErrInvalidRequest = errors.New("publish: invalid request")
-	// ErrUnsupportedPlatform classifies operating systems without this phase's
+	// ErrUnsupportedPlatform classifies operating systems without this package's
 	// atomic local replacement guarantee.
 	ErrUnsupportedPlatform = errors.New("publish: unsupported platform")
 	// ErrCandidate classifies candidate path, identity, or file failures.
@@ -64,8 +64,9 @@ type Result struct {
 	SHA256 [sha256.Size]byte
 }
 
-// Publish copies one identity-bound candidate snapshot to a verified temporary
-// sibling and atomically commits it on macOS or Linux. The candidate is never
+// Publish copies one identity-checked candidate to a verified temporary sibling
+// and atomically commits it on macOS or Linux. Callers must prevent concurrent
+// mutation and serialize publication per destination. The candidate is never
 // modified or deleted. Cancellation after the rename commit point cannot turn
 // the completed publication into failure.
 func Publish(ctx context.Context, request Request) (Result, error) {

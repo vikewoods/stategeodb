@@ -1,5 +1,5 @@
-// Package artifact validates the fixed runtime contract of generated
-// stategeodb MMDB files.
+// Package artifact validates stategeodb metadata, structure, and normalized
+// runtime fields. Unknown record fields are not currently rejected.
 package artifact
 
 import (
@@ -35,9 +35,9 @@ func Compatible(metadata maxminddb.Metadata) bool {
 		metadata.NodeCount > 0
 }
 
-// Verify validates exact project metadata and performs the upstream complete
-// structural verification. One active upstream Verify call cannot be
-// interrupted in its middle.
+// Verify validates exact project metadata, performs upstream complete
+// structural verification, and checks normalized fields in every record. One
+// active upstream Verify call cannot be interrupted in its middle.
 func Verify(ctx context.Context, reader *maxminddb.Reader) error {
 	if ctx == nil || reader == nil {
 		return ErrCorrupt

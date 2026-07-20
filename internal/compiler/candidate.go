@@ -91,8 +91,10 @@ func (candidate *Candidate) EquivalenceStats() EquivalenceStats {
 	return candidate.equivalenceStats
 }
 
-// Cleanup removes only the generated workspace owned by candidate. Repeated
-// sequential calls are harmless. A failed removal remains retryable.
+// Cleanup removes the generated workspace name within candidate's bound root.
+// The root must remain exclusively controlled by the caller because the child
+// workspace identity is not rebound at cleanup. Repeated sequential calls are
+// harmless. A failed removal remains retryable.
 func (candidate *Candidate) Cleanup() error {
 	if candidate == nil || candidate.workspaceName == "" {
 		return nil

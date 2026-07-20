@@ -1,257 +1,125 @@
 # Architecture
 
-## 1. Purpose
+## Purpose and scope
 
-`stategeodb` is an offline compiler and validation tool for creating a minimal
-MMDB artifact for `traefik-plugin-state-geo`.
+`stategeodb` is an offline compiler for one locally available MaxMind City
+MMDB. It produces the minimal runtime database consumed by
+`traefik-plugin-state-geo`, while Traefik continues to perform local in-process
+lookups.
 
-The compiler moves data acquisition, normalization, comparison, correction,
-and publication out of Traefik's request path. Traefik remains responsible only
-for resolving the client address, reading a local immutable database, applying
-middleware policy, and serving the resulting allow or deny decision.
+The implemented v1 workflow is operated locally, currently from macOS or Linux
+for publication. This repository owns source validation, normalization,
+compilation, candidate verification, bounded inspection, and local atomic
+publication. The Traefik plugin remains a separate repository and owns client
+address selection, database lifecycle, and access-control policy.
 
-This document records durable architecture. Detailed implementation sequencing
-and agent prompts live in ignored local planning files.
+Source acquisition, artifact transfer into a cluster, Longhorn behavior, and
+Traefik deployment are outside this repository.
 
-## 2. Context and drivers
-
-The middleware needs only a two-character country code and, for United States
-policy, a first-level subdivision code. A complete City database carries many
-fields that are unused but loaded into each Traefik process.
-
-The design is driven by five concerns:
-
-1. **Cluster memory:** every Traefik process needs its own in-process reader, so
-   unused database fields are multiplied by replica count.
-2. **Request availability:** geolocation enforcement must not depend on a remote
-   database, API, CDN, or cluster service.
-3. **Accuracy:** free providers can be incomplete or wrong, and agreement
-   between providers is not ground truth.
-4. **Operational safety:** an incomplete or unexpectedly changed database must
-   never replace the last known-good artifact.
-5. **Licensing:** every source retains its own attribution, internal-use, update,
-   and redistribution obligations after transformation.
-
-## 3. Architectural principles
-
-- Compile offline; look up locally.
-- Keep the runtime artifact small and immutable.
-- Separate source comparison from production merging.
-- Separate location facts from access-control decisions.
-- Make precedence and conflict handling explicit.
-- Treat IPv4 and IPv6 as equal throughout the pipeline.
-- Make identical builds reproducible.
-- Publish only after structural and behavioral verification.
-- Preserve one stable path for Traefik and one last known-good generation.
-- Prefer reports and measurable gates over inferred accuracy claims.
-
-## 4. System context
+## Current system context
 
 ```mermaid
-flowchart TB
-    subgraph External["Licensed upstream sources"]
-        MAXMIND["MaxMind GeoLite2 City"]
-        SECONDARY["Optional secondary MMDB"]
+flowchart TD
+    SOURCE["Local MaxMind City MMDB"]
+
+    subgraph REPO["stategeodb repository"]
+        NORMALIZE["Source verification and normalization"]
+        COMPILE["Deterministic compiler and MMDB writer"]
+        EQUIV["Structural and behavioral equivalence verification"]
+        CANDIDATE["Private candidate workspace"]
+        INSPECT["Bounded inspect"]
+        PUBLISH["Verified atomic publish"]
+        STABLE["dist/artifacts/stategeodb.mmdb"]
     end
 
-    subgraph Build["Scheduled build boundary"]
-        ACQUIRE["Source acquisition"]
-        INPUTVERIFY["Input verification"]
-        ADAPTERS["Source adapters"]
-        NORMALIZE["Normalized prefix records"]
-        MERGE["Comparison / merge engine"]
-        OVERRIDES["Reviewed location overrides"]
-        WRITER["Minimal MMDB writer"]
-        OUTPUTVERIFY["Output and behavior gates"]
-        REPORT["Build report and manifest"]
-        PUBLISH["Atomic publisher"]
+    subgraph OUTSIDE["Outside this repository"]
+        SYNC["Trusted external synchronization"]
+        PVC["Longhorn PVC"]
+        TRAEFIK["Traefik local lookup"]
     end
 
-    subgraph Runtime["Cluster runtime boundary"]
-        VOLUME["Shared database volume"]
-        TRAEFIK1["Traefik process"]
-        TRAEFIK2["Traefik process"]
-    end
-
-    MAXMIND --> ACQUIRE
-    SECONDARY --> ACQUIRE
-    ACQUIRE --> INPUTVERIFY --> ADAPTERS --> NORMALIZE --> MERGE
-    OVERRIDES --> MERGE
-    MERGE --> WRITER --> OUTPUTVERIFY
-    OUTPUTVERIFY --> REPORT
-    OUTPUTVERIFY --> PUBLISH --> VOLUME
-    VOLUME --> TRAEFIK1
-    VOLUME --> TRAEFIK2
+    SOURCE --> NORMALIZE --> COMPILE --> EQUIV --> CANDIDATE
+    CANDIDATE --> INSPECT
+    CANDIDATE --> PUBLISH --> STABLE
+    STABLE --> SYNC --> PVC --> TRAEFIK
 ```
 
-The scheduled build is the only component that communicates with upstream data
-providers. Runtime lookup stays local even when the scheduler, provider, or
-network is unavailable.
+Comparison, merging, corrections, acquisition, reports, Kubernetes scheduling,
+and rollback are not implemented parts of this flow.
 
-## 5. Deployment boundaries
+## Implemented component boundaries
 
-### 5.1 CLI repository
+### `internal/source`
 
-This repository owns:
+Owns provider-neutral `Record` values, prefix and location normalization,
+logical source-ID validation, and deterministic record ordering. Records carry
+geographic facts only.
 
-- source adapters and normalized data types;
-- comparison and merge behavior;
-- location override validation and application;
-- MMDB writing and verification;
-- build reports, manifests, and atomic publication primitives;
-- a container image for scheduled execution;
-- reference configuration and deployment examples.
+### `internal/source/maxmind`
 
-### 5.2 Traefik plugin repository
+Owns the MaxMind reader lifetime. It opens and verifies supported City
+databases, captures metadata without retaining caller paths, traverses the
+default effective network view, decodes only country and first-subdivision
+codes, and returns an all-or-nothing normalized record slice.
 
-The plugin repository owns:
+### `internal/mmdb`
 
-- client IP resolution and trusted proxy rules;
-- local database lifecycle and hot reload;
-- request-time caching and failure policy;
-- state and country policy decisions;
-- block response behavior.
+Owns deterministic encoding of normalized records with the fixed runtime
+schema and metadata constants. It sorts a copy of the input, rejects duplicate
+prefixes and writer alias-region conflicts, and uses the pinned MaxMind writer.
 
-The compiler must not import the plugin package. Compatibility is defined by a
-small MMDB schema and integration fixtures.
+### `internal/compiler`
 
-### 5.3 Cluster repositories
+Coordinates a single-source build. It validates the request, owns the private
+workspace, closes the source before output creation, writes and syncs the
+candidate, verifies its identity and structure, proves exact lookup
+equivalence, and returns candidate ownership only on complete success.
 
-Cluster repositories own:
+### `internal/artifact`
 
-- CronJob schedules and image pinning;
-- Secrets and provider account configuration;
-- PVC topology and access modes;
-- resource requests and limits;
-- alerting and operational rollout;
-- live deployment and rollback.
+Validates exact project metadata and the normalized country/subdivision fields
+decoded from every traversed runtime record. It does not currently reject
+unknown record fields. It is the reusable artifact-verification boundary used
+during publication.
 
-The CLI does not directly apply Kubernetes resources.
+### `internal/inspect`
 
-## 6. Planned command model
+Requires exact project metadata, performs full structural verification, and
+returns fixed metadata plus no more than 32 explicitly requested address
+lookups. Matching metadata is a compatibility check, not proof of origin.
 
-The initial command tree is:
+### `internal/publish`
 
-```text
-stategeodb build
-stategeodb compare
-stategeodb verify
-stategeodb inspect
-stategeodb publish
-```
+Owns macOS/Linux local publication. It checks candidate and destination file
+identities, copies and hashes an open candidate into a temporary sibling,
+reverifies that temporary artifact, compares destination bytes, and commits by
+rename under a trusted single-writer operating model.
 
-### `build`
+### `internal/cli`
 
-Loads configured local inputs, applies the selected merge policy and location
-overrides, writes a candidate minimal MMDB, and validates it. It never publishes
-the candidate or replaces the stable artifact.
+Parses command flags, maps domain errors to fixed redacted diagnostics, writes
+machine-readable key/value results to stdout, and preserves the current binary
+process-status contract. `cmd/stategeodb` supplies a signal-aware context and
+calls this package. A failed stdout write can leave a partial result, so callers
+must consume stdout only when process status is `0`.
 
-### `compare`
+## Source contract
 
-Traverses one or more sources and reports coverage, missing values, conflicts,
-and changes. It does not write a production MMDB or change publication state.
+The MaxMind adapter accepts only exact database types `GeoLite2-City` and
+`GeoIP2-City`. It requires MMDB binary format 2.0, IP version 4 or 6, a positive
+node count, record size 24, 28, or 32, valid UTF-8 metadata text, and at least
+one description. Country, Enterprise, ASN, near-match, and project-generated
+database types are unsupported source inputs.
 
-### `verify`
+Open succeeds only after metadata compatibility checks and the upstream full
+structural verifier succeed. A successful database is pointer-owned and must be
+closed. The reader is closed on failed open validation and by the compiler
+immediately after record ingestion.
 
-Validates an input or generated MMDB, configuration, override file, provenance
-manifest, checksum, and configured behavioral gates.
-
-### `inspect`
-
-Prints database metadata and explicitly requested prefix or address records for
-operator diagnostics. It must not enumerate or expose full licensed datasets by
-default.
-
-### `publish`
-
-Publishes an already built and verified candidate through the explicit
-publication boundary. It does not acquire inputs, compile sources, change
-records, or perform an implicit build. `publish` is the only command that may
-replace the stable artifact.
-
-The Phase 0 command shell exposes all five commands and their help. Their domain
-operations remain explicitly unavailable until their implementation phases.
-The current shell uses process status `0` for success and `1` for every failure;
-stderr diagnostics distinguish invalid usage, unavailable commands, and output
-failures. This binary status model is a foundation-stage contract, not a promise
-about the taxonomy needed after real automation behavior is implemented.
-
-## 7. Internal component boundaries
-
-The package names below describe responsibilities rather than a frozen layout.
-
-### Configuration
-
-This planned boundary will parse and validate file, environment, and flag inputs
-into one immutable runtime configuration. Concrete parsing begins only when
-Phase 1 defines real source-ingestion fields; the foundation intentionally has
-no empty configuration type, precedence machinery, or format dependency.
-Configuration validation must complete before source acquisition or output
-creation once implemented.
-
-### Source acquisition
-
-Makes an input database available locally. MaxMind binary acquisition should
-normally be delegated to the official `geoipupdate` program or container.
-Adapters for other sources may perform bounded downloads when their license and
-distribution mechanism permit it.
-
-Acquisition and compilation remain separate interfaces so builds can run from
-already downloaded files in tests and controlled environments.
-
-### Source adapter
-
-Opens and verifies one MMDB, reads its metadata, iterates networks, and maps its
-provider-specific schema into normalized records.
-
-The implemented MaxMind opening boundary uses the direct
-`github.com/oschwald/maxminddb-golang/v2` reader pinned at `v2.4.1` rather than
-the higher-level GeoIP reader. The direct API provides source metadata, full
-structural verification, and the network iterator required by Phase 1.3 while
-allowing provider records to remain separate from the source-neutral model.
-The reader is ISC licensed; its platform mapping support introduces
-`golang.org/x/sys` as an indirect runtime dependency.
-
-Opening accepts only exact `GeoLite2-City` and `GeoIP2-City` database types and
-binary format `2.0`. Format major or minor changes, near-match database names,
-Country, Enterprise, ASN, anonymous-IP, custom, and generated project database
-types are unsupported until explicitly added with fixture evidence. Both
-IPv4-only and dual-stack City databases are compatible at this boundary.
-
-A database is returned only after the reader opens the caller's path, required
-metadata compatibility is validated, and the upstream full verifier succeeds.
-Any failure after opening closes the reader; a cleanup failure is retained
-without hiding the primary classification. The owning wrapper must be used by
-pointer, and its caller is responsible for closing it. The upstream reader may
-use its supported memory map or in-memory fallback, and the wrapper must not
-rely on garbage collection to release either representation. Close must not
-race with future reader operations.
-
-The adapter captures database type, binary format version, build epoch, IP
-version, node count, record size, languages, and localized descriptions.
-Language slices and description maps are copied when captured and on every
-metadata access, so the snapshot remains independent and readable after the
-mapped reader closes. It never includes the source filesystem path.
-
-Metadata compatibility and structural verification do not prove that City
-records contain the expected country and subdivision shape. Network traversal,
-record-schema decoding, normalization, deterministic emission, and
-cancellation-aware application-controlled loops remain Phase 1.3 work. The
-synchronous open-and-verify primitive does not accept a context because the
-pinned calls cannot be interrupted safely; it is not run in a background
-goroutine to simulate cancellation.
-
-This primitive assumes acquisition supplies a stable, finite local artifact.
-It deliberately does not pre-open and then reopen the path, copy a complete
-database, reject symlinks, or impose an adapter-specific production size limit.
-Acquisition must publish a completed source as a stable inode and must not
-truncate or rewrite that inode while an mmap-backed reader is open. Full
-verification is synchronous and proportional to database contents; operational
-resource limits and cancellation begin where the application controls the
-Phase 1.3 traversal loop.
+Each normalized record contains:
 
 ```go
-type SourceRecord struct {
+type Record struct {
     Prefix      netip.Prefix
     Country     string
     Subdivision string
@@ -259,84 +127,30 @@ type SourceRecord struct {
 }
 ```
 
-The implemented source-neutral record is an ordinary copyable Go value. Its
-source ID is a non-empty logical identifier such as `primary` or
-`maxmind-city`, never an inferred filesystem path. Source IDs preserve case and
-use an ASCII token: they begin and end with a letter or digit and may contain
-letters, digits, hyphens, underscores, or periods. Paths, URLs, Unicode,
-whitespace, and control characters are invalid.
+The record rules are:
 
-An empty country and subdivision represent a known source network whose
-required location is unknown. A subdivision without a country is invalid. The
-record contains geographic facts only and must not carry middleware allow/deny
-policy, credentials, authenticated URLs, filesystem paths, or complete provider
-metadata.
+- native IPv4 and IPv6 prefixes are masked to canonical network form;
+- IPv4-mapped IPv6 prefixes wholly inside `::ffff:0:0/96` become native IPv4,
+  with 96 removed from the prefix length;
+- a shorter mapped prefix that also covers native IPv6 space is rejected;
+- country is empty or exactly two ASCII letters, normalized to uppercase;
+- first subdivision is empty or one to three ASCII letters or digits,
+  normalized to uppercase;
+- subdivision requires a country;
+- an empty country and subdivision represent a present network with unknown
+  required location;
+- `SourceID` is a stable ASCII token supplied by the caller, not a path or URL;
+- only `country.iso_code` and `subdivisions[0].iso_code` are decoded.
 
-### Normalizer
+Records are returned in a total order: IPv4 before IPv6, then address, prefix
+length, source ID, country, and subdivision. The default upstream `Networks()`
+view suppresses synthetic IPv4 alias networks. Ingestion returns no partial
+records on decoding failure or cancellation, and duplicate normalized prefixes
+are rejected.
 
-Canonicalizes addresses and ISO-style codes:
+## Runtime artifact contract
 
-- rejects invalid prefixes and masks native IPv4 and IPv6 prefixes;
-- converts an IPv4-mapped IPv6 prefix contained by `::ffff:0:0/96` to native
-  IPv4, subtracting 96 from its prefix length;
-- rejects shorter mapped prefixes that also describe non-mapped IPv6 space;
-- accepts an empty country as unknown, otherwise requiring exactly two ASCII
-  letters and normalizing lowercase to uppercase;
-- accepts an empty first subdivision as unknown, otherwise requiring one to
-  three ASCII letters or digits and normalizing lowercase to uppercase;
-- represents absent values explicitly;
-- does not maintain country or subdivision membership tables.
-
-Normalized records have one deterministic total order: IPv4 before IPv6,
-network address ascending, prefix length ascending for the same address, source
-ID ascending, country ascending, then subdivision ascending. Ordering does not
-deduplicate records and cannot depend on input or map iteration order.
-
-### Comparison and merge engine
-
-Traverses the union of relevant provider prefix boundaries and calculates the
-effective normalized record for each segment. It must avoid assuming that one
-provider's prefix aligns with another's.
-
-The engine supports two distinct operations:
-
-- **comparison:** observe and report without selecting a production value;
-- **merge:** select a value according to an explicit configured policy.
-
-### Override engine
-
-Loads reviewed CIDR location corrections, validates conflicts and expiry, and
-applies longest-prefix precedence after source merging.
-
-### Writer
-
-Writes the effective records into a new MMDB with deterministic insertion order
-and minimal data fields. It uses the upstream MaxMind MMDB writer in this
-compiled tool, never in the Yaegi plugin.
-
-### Verifier
-
-Reopens input and output databases, performs structural verification, checks
-metadata and schema, executes behavioral fixtures, and evaluates change gates.
-
-### Reporter
-
-This planned boundary will produce human-readable or JSON evidence for commands
-with real structured results. JSON schemas begin with bounded inspection,
-verification, or build reporting rather than a generic foundation envelope.
-Reports will describe inputs, configuration fingerprints, source versions,
-coverage, disagreements, overrides, output metadata, checksums, gate results,
-and publication outcome.
-
-### Publisher
-
-Moves one completely verified candidate to the stable path using an atomic
-same-filesystem rename. It never acquires sources or changes records.
-
-## 8. Runtime MMDB schema
-
-The first output schema intentionally matches fields already decoded by the
-Traefik plugin:
+Compiler-generated records contain only this data-bearing runtime shape:
 
 ```json
 {
@@ -351,348 +165,274 @@ Traefik plugin:
 }
 ```
 
-Country is omitted or empty when unknown. `subdivisions` is omitted or empty
-when the first-level subdivision is unknown.
-
-Per-prefix provenance is excluded from the production record by default because
-it increases artifact size. Detailed provenance belongs in the build report and
-manifest. A future compact confidence or source flag requires a measured runtime
-use case and a schema version change.
-
-MMDB metadata should include:
-
-- a distinct database type such as `StateGeo-Country-Subdivision`;
-- a schema version in the description or companion manifest;
-- the injected build epoch;
-- IPv6 support when both address families are present.
-
-## 9. Merge semantics
-
-### 9.1 Initial production policy
-
-GeoLite2 City is initially authoritative. Secondary sources begin in comparison
-mode only.
-
-When fallback merging is explicitly enabled:
-
-| Primary | Secondary | Effective value | Evidence |
-|---|---|---|---|
-| present | same | primary | agreement |
-| present | different | primary | conflict |
-| missing | present | secondary | fallback fill |
-| present country, missing subdivision | same country and subdivision present | secondary subdivision | fallback fill |
-| present country | different country | primary | country conflict |
-| missing | missing | missing | no coverage |
-
-This is a conservative completeness policy, not a claim that the primary source
-is always correct.
-
-### 9.2 Provider voting
-
-Majority or consensus merging is deferred. Provider datasets can share upstream
-signals, and two matching sources do not establish truth. Any future voting
-policy needs a ground-truth evaluation set, explicit false-allow/false-deny
-trade-offs, and separate rollout approval.
-
-### 9.3 Prefix boundaries
-
-Providers may assign different network lengths to the same address space. The
-merge engine must calculate values over the union of boundaries and emit the
-smallest correct set of output prefixes. Counting source records alone is not a
-valid coverage or accuracy metric.
-
-Combining sources may increase tree size even when output records contain fewer
-fields. Artifact size and resident memory must therefore be measured for every
-merge strategy.
-
-## 10. Location overrides
-
-Overrides correct geographic facts for reviewed networks:
-
-```yaml
-locationOverrides:
-  - network: 203.0.113.0/24
-    country: US
-    subdivision: CA
-    reason: Confirmed provider correction
-    owner: infrastructure
-    expiresAt: 2026-12-31
-```
-
-Required invariants:
-
-- network, reason, and owner are mandatory;
-- country and subdivision follow the normalized output rules;
-- a subdivision requires a compatible country;
-- longest prefix wins across different networks;
-- duplicate conflicting prefixes fail validation;
-- expired overrides are surfaced and governed by an explicit policy;
-- override use appears in reports without exposing unrelated source data.
-
-Overrides do not contain `allow` or `deny`. Existing IP allowlists and any future
-IP blocklists remain access-control inputs outside the location database.
-
-## 11. Build lifecycle
-
-```mermaid
-sequenceDiagram
-    participant S as Scheduler
-    participant A as Acquisition
-    participant C as Compiler
-    participant V as Verifier
-    participant P as Publisher
-    participant T as Traefik
-
-    S->>A: Prepare source files
-    A-->>S: Verified local paths and metadata
-    S->>C: Build candidate in run workspace
-    C-->>S: Candidate and build report
-    S->>V: Reopen candidate and evaluate gates
-    V-->>S: Verified checksum and manifest
-    S->>P: Publish verified candidate
-    P->>P: Atomic same-filesystem rename
-    P-->>S: Stable path and retained generation
-    T->>T: Detect and load new stable file
-```
-
-`build` owns candidate creation and verification and then stops. Publication
-requires a separate `publish` command invocation. The current stable artifact
-is unchanged if any step before the publisher's rename fails. The candidate
-workspace is unique to one run and can be cleaned independently.
-
-## 12. Verification and quality gates
-
-### Structural gates
-
-- MMDB parser and full verifier succeed.
-- Database metadata and schema are supported.
-- Both address families expected by configuration are present.
-- Every emitted prefix is canonical.
-- Every emitted record decodes using the runtime compatibility structure.
-
-### Behavioral gates
-
-- Known IPv4 and IPv6 fixtures return expected values.
-- A single-source minimized build matches its source for every effective network
-  record, not only a small sample.
-- Override precedence and expiry behave as configured.
-- Output is byte-identical for identical inputs, configuration, overrides, and
-  injected build epoch.
-
-### Change gates
-
-Configurable thresholds may reject:
-
-- an unexpectedly old or future-dated source;
-- a large country or subdivision coverage drop;
-- an unexpected conflict increase;
-- an output record-count or file-size explosion;
-- a large behavioral difference from the stable artifact;
-- a checksum or manifest mismatch.
-
-Threshold failures require a new build or explicit operator policy change; they
-must not be silently ignored during scheduled execution.
-
-## 13. Determinism
-
-Reproducibility is required for reviewable artifacts and meaningful checksums.
-
-- Sort source identities, prefixes, and overrides before processing.
-- Do not depend on Go map iteration order.
-- Inject build time rather than reading the wall clock deep in the compiler.
-- Canonicalize configuration before hashing it.
-- Pin source versions by checksum in the manifest.
-- Keep human-only diagnostics out of binary records.
-
-With build time fixed, identical inputs and configuration must produce
-byte-identical MMDB, manifest, and JSON report content.
-
-## 14. Publication and rollback
-
-Only the `publish` command invokes the publisher. The publisher receives an
-already built and verified candidate and explicit destination. It:
-
-1. Confirms the candidate and destination are on the intended filesystem.
-2. Writes or moves the candidate to a temporary sibling path.
-3. Syncs completed content when supported and appropriate.
-4. Renames the temporary file to the stable path atomically.
-5. Retains a bounded set of prior versioned artifacts or a known rollback path.
-6. Emits the final checksum and publication result.
-
-Publication must not use copy-overwrite semantics on the stable file. Traefik
-must see either the old complete MMDB or the new complete MMDB.
-
-Retention cleanup operates only on validated versioned artifacts in the
-configured output directory. It must never recursively delete a broad or
-unresolved path.
-
-## 15. Kubernetes operating model
-
-The recommended deployment is one CronJob per cluster, not one updater per
-Traefik pod.
-
-The CronJob should use:
-
-- `concurrencyPolicy: Forbid`;
-- a bounded active deadline and retry policy;
-- temporary `emptyDir` workspace;
-- a mounted source credential/config Secret;
-- the database PVC mounted read-write only in the builder;
-- read-only database mounts in Traefik where storage topology permits;
-- CPU and memory requests sized from full-dataset build benchmarks;
-- a pinned builder and updater image digest.
-
-The actual access mode must be verified in each cluster. A CronJob cannot safely
-assume a multi-node writable mount when the PVC is `ReadWriteOnce`. Cluster
-manifests must solve scheduling and volume topology explicitly.
-
-The scheduler may check frequently, but it should compile and publish only when
-source identity, overrides, compiler version, or merge configuration changes.
-
-## 16. Failure model
-
-| Failure | Result |
-|---|---|
-| Source unavailable | Scheduled run fails; stable MMDB remains active |
-| Source corrupt or unsupported | Input gate fails before compilation |
-| Provider conflict | Reported; configured merge rule selects or rejects |
-| Override conflict or expiry violation | Build fails before output publication |
-| Compiler cancellation | Temporary workspace removed; stable file unchanged |
-| Output verification failure | Candidate retained only for bounded diagnostics or removed safely |
-| Threshold regression | Publication refused |
-| Atomic rename failure | Stable file remains old or operation reports exact uncertain state |
-| Traefik reload failure | Plugin retains its last known-good reader |
-
-No scheduler failure should make the existing runtime lookup depend on the
-scheduler recovering immediately.
-
-The foundation runner already receives a signal-aware context, but immediate
-help and version output does not fail merely because that context is cancelled.
-Operation-level cancellation and internal typed domain errors begin with the
-first blocking domain behavior. Those operations must propagate cancellation
-and preserve the published artifact.
-
-## 17. Security, privacy, and licensing
-
-- Credentials are acquisition inputs and never compiler records.
-- Authenticated URLs and provider keys are redacted from diagnostics.
-- Input and output paths are validated before cleanup or publication.
-- Archive extraction, if implemented, rejects traversal and unsafe links.
-- Reports avoid full record dumps and real client-IP datasets by default.
-- Fixtures use synthetic or provider-supplied test databases.
-- Generated artifacts remain outside Git.
-- Build manifests retain source identity and license attribution references.
-- Mixing datasets requires review of all applicable terms; an open-source writer
-  license does not grant rights to redistribute its input data.
-
-## 18. Performance model
-
-The runtime objective is a smaller MMDB and lower per-Traefik-process memory.
-The build process may use more temporary memory to guarantee correctness.
-
-Measure at least:
-
-- source and output file sizes;
-- number and distribution of IPv4 and IPv6 prefixes;
-- peak builder resident memory;
-- compiler wall time;
-- output lookup latency in compiled Go and the Traefik smoke environment;
-- transient Traefik memory during database reload;
-- effect of provider-boundary union on tree size.
-
-Do not optimize prefix structures or introduce concurrency without benchmark or
-profile evidence. Determinism and correctness take priority over build speed.
-
-## 19. Observability
-
-Every build produces a concise summary and optional JSON report containing:
-
-- compiler version and configuration fingerprint;
-- source type, build epoch, checksum, and record counts;
-- agreement, missing-value, fallback-fill, and conflict counts;
-- override counts, expirations, and applied networks;
-- output type, schema version, checksum, file size, and prefix counts;
-- verification gate results;
-- publication status and previous generation identity;
-- total duration and peak memory when available.
-
-Normal summaries must not include credentials or bulk licensed records.
-
-## 20. Test strategy
-
-### Unit tests
-
-- configuration validation;
-- code normalization;
-- IPv4 and IPv6 prefix handling;
-- boundary union and longest-prefix behavior;
-- merge truth tables;
-- override validation and precedence;
-- deterministic ordering;
-- error classification.
-
-### Integration tests
-
-- read provider-supplied test MMDB fixtures;
-- write and reopen minimal MMDB output;
-- prove single-source behavioral equivalence;
-- compare sources with overlapping and misaligned prefixes;
-- verify candidate publication and rollback behavior in temporary directories;
-- cancel builds at controlled stages and confirm stable output is unchanged.
-
-### Fuzz tests
-
-- configuration and override parsers;
-- prefix boundary calculations;
-- normalized record decoding;
-- archive handling if it is implemented.
-
-### Benchmarks
-
-- source iteration;
-- boundary union and merge;
-- MMDB writing;
-- full realistic build memory and duration;
-- output file size versus the original source.
-
-## 21. Intended repository layout
-
-The implementation may refine names while preserving boundaries:
+An unknown-location network is encoded as an empty map. It remains a
+data-bearing prefix and is distinct from an address with no matching prefix.
+Country is omitted when unknown; subdivisions are omitted when unknown.
+
+Generated metadata and the logical schema identity are fixed as follows:
+
+| Field | Contract |
+| --- | --- |
+| Database type | `StateGeo-Country-Subdivision` |
+| Logical schema version reported by the CLI | `1` |
+| Description | `stategeodb country/subdivision schema v1` |
+| Build epoch | caller-supplied positive Unix timestamp |
+| Binary format | `2.0` |
+| IP version | `6` |
+| Record size | `28` |
+| Languages | empty |
+
+Node count must be positive. The logical source ID is excluded from runtime
+records and output bytes. Schema version is not a separate MMDB metadata key;
+the exact description encodes the version and the CLI reports the corresponding
+package constant. An incompatible runtime-record change requires a new database
+type; a compatible revision retains the type and advances the logical version
+and description together.
+
+The current artifact verifier decodes and validates the required normalized
+fields in every record but does not prove that unknown map fields or additional
+subdivision elements are absent. Publication therefore assumes candidates come
+from a trusted `stategeodb build` workflow.
+
+## Build and equivalence lifecycle
+
+1. Validate a non-nil context, source path, logical source ID, positive build
+   epoch, and existing absolute non-symlink workspace root.
+2. Bind the workspace-root identity through `os.Root`.
+3. Open and structurally verify the source, ingest every normalized record,
+   then close the source before creating a workspace.
+4. Create a random workspace with mode `0700` and a new identity-checked
+   `candidate.mmdb` with mode `0600`.
+5. Sort and encode records deterministically, sync and close the candidate, and
+   validate its size, type, mode, and identity.
+6. Read the identity-bound candidate snapshot, reopen it through the reader,
+   verify structure and exact metadata, and traverse every output network.
+7. Convert source and output prefixes to inclusive effective-address
+   intervals, reject overlaps, sort by address family and boundaries, and
+   compare every covered segment for presence and location equality.
+8. Revalidate the candidate and workspace-root identities, close the root, and
+   return candidate ownership.
+
+Interval comparison proves effective lookup equivalence, not identical prefix
+shape. The writer may split or compact prefixes when every address still has
+the same presence, country, and subdivision result.
+
+Any compile error returns no candidate and attempts to remove the generated
+workspace name inside the bound root. A successful candidate remains until its
+owner explicitly calls `Cleanup`; the CLI retains it after successful output.
+If writing successful CLI output fails, the CLI attempts candidate cleanup.
+The workspace root must be operator-owned and exclusively writable during the
+invocation: cleanup does not bind the child workspace-directory identity and is
+not safe against a concurrent same-UID entry replacement.
+
+Cancellation is checked before and between application-controlled stages and
+inside source-record ingestion, artifact traversal, interval verification,
+publication copy, and comparison loops. Individual upstream calls cannot be
+interrupted mid-call. The complete MMDB writer window—sorting, insertion,
+`WriteTo`, and candidate sync, stat, and close—runs until the next context check;
+a second process signal does not force that window to terminate. Cancellation
+observed before candidate return triggers workspace cleanup; it never changes
+the stable published artifact.
+
+## Inspection boundary
+
+Inspection accepts artifacts whose metadata exactly matches the runtime
+contract. It performs upstream full structural verification before producing a
+result but cannot authenticate that a matching artifact was produced by this
+compiler.
+
+With no `--ip` flags, it returns metadata only. With addresses, it accepts at
+most 32 explicit, zone-free addresses, unmaps mapped IPv4 addresses, and
+returns results in request order. `found=false` means no data-bearing prefix;
+`found=true` with empty country and subdivision means a present
+unknown-location record.
+
+Inspection does not traverse records to produce a dump. The only requested
+record data comes from explicit address lookups. A domain failure produces no
+formatted result; a later stdout write failure can leave partial bytes and
+returns process status `1`.
+
+## Publication boundary
+
+Publication is implemented only for local macOS and Linux filesystems. Both
+candidate and destination leaf paths must identify regular, non-symlink files;
+an absent destination is allowed. Destination parent directories must already
+exist. Candidate and parent directories, the publisher UID, and the temporary
+namespace are trusted: callers must not mutate them concurrently, and
+publication must be serialized per destination. The implementation has no
+cross-process lock and does not support competing publishers or hostile
+same-UID writers.
+
+The publisher:
+
+1. opens candidate and destination parents with `os.Root` and binds their
+   identities;
+2. opens a regular candidate and performs repeated identity checks;
+3. creates a random temporary sibling with mode `0644`;
+4. streams the candidate into that sibling while computing SHA-256;
+5. syncs and closes the temporary file;
+6. reopens the same temporary identity and verifies exact project metadata,
+   structure, and normalized fields in every runtime record;
+7. compares the temporary and destination byte streams exactly when the
+   destination exists;
+8. removes the temporary and returns `unchanged` when bytes match;
+9. otherwise revalidates parent, destination, and temporary identities and
+   renames the temporary file to the destination as the commit point.
+
+Success reports `created`, `replaced`, or `unchanged`, along with size and
+SHA-256. The candidate is never modified or deleted. No backup, version
+history, or rollback artifact is created.
+
+Cancellation observed before rename leaves the destination unchanged and
+attempts name-scoped temporary cleanup. Cancellation observed only after a
+successful rename does not turn the committed publication into failure. If the
+CLI cannot write its result after publication returns, it exits with failure
+but does not undo the commit; a retry detects `unchanged`.
+
+File content is synced before rename. The implementation does not sync the
+destination directory and therefore makes no directory-entry power-loss
+durability claim.
+
+## Determinism and correctness invariants
+
+- Build epoch is explicit and positive; the compiler does not read wall time.
+- Normalized record order is independent of input order and map iteration.
+- Logical source ID does not affect output bytes.
+- Exact duplicate normalized prefixes are rejected.
+- Overlapping effective source or output intervals are rejected by equivalence
+  verification.
+- Native IPv6 records in the writer's IPv4 storage region are rejected, and
+  alias-region insertion failures are build failures.
+- Generated metadata and normalized fields in every runtime record are verified
+  before publication; absence of unknown fields is not currently enforced.
+- Equivalence covers the complete effective IPv4 and IPv6 address intervals
+  represented by source and output, including present unknown locations.
+- Compile returns a fully verified candidate or no candidate.
+
+Tests cover repeated and cross-process deterministic writer output, shuffled
+input, changed source IDs, both address families, split and compacted prefixes,
+unknown-location presence, cancellation boundaries, identity replacement, and
+pre-commit publication failures.
+
+## Filesystem and trust boundaries
+
+Compiler workspaces are private (`0700`) and candidate files are private
+(`0600`). Workspace creation, candidate access, and cleanup are confined by an
+identity-bound `os.Root`. Cleanup receives the generated workspace name and
+does not infer a recursive target from output text or an unresolved glob. It is
+root/name-scoped, not identity-bound at the child workspace entry, so exclusive
+control of the workspace root is required.
+
+Publication checks identities and independently reverifies the temporary file
+it creates. Candidate and destination leaf symlinks, directories, and special
+files are rejected. The identity checks do not make an owner-writable file
+immutable between check and rename, and the current cleanup and rename actions
+are pathname operations. Trusted parents, no concurrent same-UID mutation, and
+a single publisher per destination are therefore part of the operating model.
+
+Caller paths and upstream parser details are omitted from normal domain errors
+and fixed CLI diagnostics. Successful `candidate_path` output is informational:
+trust-sensitive consumers must open and reverify the file under their own
+exclusive-control or immutable-snapshot mechanism. The current publisher uses
+the exclusive-control model documented above.
+
+Generated CLI and artifact output belongs under ignored `dist/`. Private source
+data and workspaces belong under ignored `tmp/` or another operator-owned local
+path.
+
+## Performance and resource model
+
+The repository includes the approved 250-record upstream fixture, deterministic
+synthetic compilation benchmarks up to 100,000 records, and an opt-in real City
+test and benchmark.
+
+The reported real GeoLite measurement used approximately 5.8 million normalized
+records. Warm-cache full-compilation benchmark samples took roughly 19–21
+seconds on the tested Apple Silicon machine. Process/container measurements
+reported approximately 2.7 GiB peak resident memory on that host and in the
+tested Linux container. In the measured container configuration, this dataset
+did not complete with 512 MiB or 1 GiB limits. These are observations from
+particular data, hardware, runtime, cache state, and measurement conditions; the
+private source was not available for this documentation task and the results
+are not performance guarantees.
+
+Go benchmark `B/op` reports cumulative allocations per operation, not peak
+resident memory. Peak RSS must be measured at the process or container level.
+The supported v1 build workflow is local Mac/Linux operation. Approximately 4
+GiB available memory is the current operational-headroom recommendation, not a
+measured minimum. Kubernetes build automation and memory optimization are
+deferred to the [roadmap](ROADMAP.md).
+
+## Deployment boundary
+
+The default stable local artifact is:
 
 ```text
-.
-├── cmd/stategeodb/          CLI entry point and command wiring
-├── internal/
-│   ├── config/              configuration parsing and validation
-│   ├── source/              provider adapters and acquisition contracts
-│   ├── normalize/           canonical records and codes
-│   ├── compare/             boundary union and comparison
-│   ├── merge/               explicit production merge policies
-│   ├── override/            reviewed CIDR corrections
-│   ├── mmdb/                output writer and compatibility verifier
-│   ├── report/              JSON and human build evidence
-│   └── publish/             atomic publication and retention
-├── testdata/                synthetic or license-compatible fixtures
-├── docs/
-│   └── ARCHITECTURE.md
-├── AGENTS.md
-└── README.md
+dist/artifacts/stategeodb.mmdb
 ```
 
-## 22. Deferred decisions
+Created or replaced files have mode `0644`; an `unchanged` publication preserves
+the existing file identity and mode. Any transfer to a Longhorn PVC is a
+separate trusted workflow outside this repository. Such an integration needs to
+account for directory traversal permissions, Traefik's runtime UID, cross-UID
+file readability, volume topology, and reload verification.
 
-The following require phase evidence before selection:
+`stategeodb` currently has no Kubernetes API use, manifest, PVC synchronization,
+cluster deployment, Traefik reload, backup, or rollback responsibility.
 
-- the precise CLI/configuration libraries;
-- whether acquisition beyond MaxMind lives in this binary or a dedicated init
-  container;
-- the union-prefix data structure and concurrency model;
-- exact build-report schema and stable exit-code taxonomy;
-- retention representation: versioned files, pointer file, or another bounded
-  layout;
-- any consensus, confidence, or multi-provider voting policy;
-- whether a compact provenance field ever belongs in runtime MMDB records.
+## Failure model
 
-These choices must be made from implementation constraints, representative
-fixtures, benchmark results, and cluster volume topology rather than assumed in
-advance.
+| Condition | Candidate or destination effect |
+| --- | --- |
+| Invalid build or publish request | No generated candidate and no destination change |
+| Unsupported or corrupt source | No candidate workspace is created |
+| Cancelled build | No candidate is returned; root/name-scoped workspace cleanup is attempted |
+| Candidate write or verification failure | No candidate is returned; root/name-scoped workspace cleanup is attempted |
+| Equivalence mismatch | No candidate is returned; root/name-scoped workspace cleanup is attempted |
+| Inspect domain failure | No formatted result is produced; inspected file is unchanged |
+| Unchanged publish | Success; destination identity and metadata remain unchanged; candidate retained |
+| Pre-commit publish failure | Destination remains unchanged; temporary cleanup is attempted; candidate retained |
+| Rename failure | Destination remains at its pre-commit state; temporary cleanup is attempted |
+| Post-commit publisher cleanup failure | Destination remains committed; CLI returns status 1 without result output; retry normally reports `unchanged` |
+| Post-commit CLI output failure | Destination remains committed; CLI returns status 1; retry reports `unchanged` |
+
+Cleanup failures are joined to the primary internal classification without
+exposing raw filesystem details. The current CLI uses status `0` for success
+and `1` for all failures; fixed stderr diagnostics distinguish the domain. Any
+command output-write failure may leave partial stdout, which must be discarded.
+
+## Security and licensing
+
+Licensed production sources, generated production artifacts, account IDs,
+license keys, authenticated URLs, and `GeoIP.conf` stay out of Git. Approved
+fixture origins, licenses, notices, and checksums are recorded in
+[testdata/README.md](../testdata/README.md).
+
+Bounded inspection avoids bulk licensed-data output. Normal diagnostics redact
+paths, input values, parser offsets, and file contents. Compiler and publisher
+filesystem operations use scoped roots, identity checks, regular-file checks,
+private workspaces, and name-scoped cleanup. These controls assume trusted,
+exclusively controlled working and destination parents; they do not protect
+against concurrent hostile same-UID mutation.
+
+Operators are responsible for obtaining sources lawfully, keeping them current,
+meeting attribution requirements, and reviewing any redistribution. A generated
+or minimized artifact is still derived from the licensed source; redistribution
+is not automatically permitted.
+
+## Current non-goals
+
+- A request-time API or remote lookup dependency.
+- Network, SQL, document-database, or cache service in Traefik's request path.
+- Access-control allow/deny policy inside MMDB records.
+- Source downloading or credential management.
+- Kubernetes deployment or automatic PVC synchronization.
+- Custom location corrections.
+- Multi-source comparison, merging, or voting.
+- Backup, retained generations, or rollback.
+- Treating memory optimization as a blocker for the current local v1.
+
+## Future direction
+
+Durable future priorities are recorded in [ROADMAP.md](ROADMAP.md). Current
+operator behavior remains documented in the repository [README](../README.md).

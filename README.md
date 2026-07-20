@@ -1,249 +1,288 @@
 # stategeodb
 
-`stategeodb` is an offline compiler for producing small, deterministic MaxMind
-DB (MMDB) artifacts containing only the country and first-level subdivision
-data required by `traefik-plugin-state-geo`.
-
-The project keeps geolocation acquisition, comparison, normalization,
-correction, and publication outside Traefik's request path. Traefik continues
-to perform local in-process MMDB lookups and never depends on a remote API,
-SQL database, document database, or a specific CDN.
-
-> [!IMPORTANT]
-> The CLI currently exposes the planned domain commands for help and automation
-> discovery, but their domain operations are not implemented yet.
-
-## Current CLI foundation
-
-The implemented root command accepts these forms:
-
-```text
-stategeodb
-stategeodb --help
-stategeodb -h
-stategeodb help
-stategeodb --version
-```
-
-Root help lists `build`, `compare`, `verify`, `inspect`, and `publish` in that
-order. Each command supports `stategeodb help <command>`,
-`stategeodb <command> --help`, and `stategeodb <command> -h`.
-
-Help and version results are written to stdout. Invoking a recognized domain
-command returns exit code `1` with a fixed unavailable diagnostic on stderr.
-Invalid flags, arguments, command names, and output failures also return exit
-code `1`. The current CLI therefore uses `0` for success and `1` for failure;
-stderr diagnostics, rather than process-status subcategories, distinguish
-failure causes. This binary model may be revised after real automation
-requirements exist. Domain operations, configuration, JSON output, MMDB
-processing, and publication are not implemented in the current build.
-
-The internal source-neutral normalization layer now validates canonical IPv4,
-IPv6, and mapped-IPv4 prefixes, country and first-subdivision codes, and stable
-logical source IDs. The MaxMind adapter pins
-`github.com/oschwald/maxminddb-golang/v2` at `v2.4.1` and can open a local
-`GeoLite2-City` or `GeoIP2-City` MMDB, validate its metadata, run the upstream
-full structural verifier, and expose an application-owned metadata snapshot.
-It does not traverse networks or decode records, and it is not wired to any CLI
-command. Source acquisition remains external.
-
-The adapter uses the direct ISC-licensed MMDB reader because the compiler needs
-metadata and full verification now and direct network iteration in the next
-phase without adopting the high-level GeoIP result model. Its current metadata
-compatibility is deliberately strict: database types must match exactly and
-the binary format must be `2.0`. The minor-version restriction follows the
-pinned verifier and must be revisited if that verifier adds newer format
-support. IPv4-only City databases remain compatible.
-
-## Development
-
-Development requires Go 1.26 or newer within the Go 1 compatibility promise.
-On macOS and Linux systems with Make available, run the complete local
-foundation validation with:
-
-```text
-make check
-```
-
-`make build` writes the executable to `bin/stategeodb`. The `bin/` directory is
-ignored by Git. The Makefile is a POSIX-oriented convenience; developers
-without Make can run the authoritative commands directly:
-
-```text
-find . -type f -name '*.go' -exec gofmt -l {} +
-go mod tidy -diff
-go list -m all
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
-if [ -L bin ] || [ -L bin/stategeodb ]; then
-  printf '%s\n' 'refusing to build through a symlink' >&2
-  false
-else
-  mkdir -p bin
-  go build -o bin/stategeodb ./cmd/stategeodb
-fi
-```
-
-The current CLI keeps help, version, invalid-usage, and unavailable-command
-output text-only. Concrete configuration remains deferred until source
-ingestion is wired to an operation; JSON schemas begin with structured report
-or inspection results; and operation-level cancellation tests begin with the
-first application-controlled blocking loop. All five domain operations remain
-unavailable in this build.
-
-## Why this exists
-
-City databases contain substantially more information than the middleware
-needs. Loading those complete files in every Traefik process duplicates unused
-city names, coordinates, postal data, localized names, and other fields across
-the cluster.
-
-`stategeodb` will compile source databases into a minimal schema:
+`stategeodb` compiles one locally acquired MaxMind `GeoLite2-City` or
+`GeoIP2-City` MMDB into a deterministic project MMDB for
+`traefik-plugin-state-geo`. The output retains only:
 
 ```text
 country.iso_code
 subdivisions[0].iso_code
 ```
 
-It will also provide an auditable place to:
+Compilation is an offline build-time operation. Traefik continues to perform
+local MMDB lookups without a request-time network, SQL, document-database,
+cache-server, or CDN dependency.
 
-- compare independent geolocation sources without changing production policy;
-- fill missing data using an explicit, conservative merge policy;
-- apply reviewed CIDR location corrections;
-- validate database structure, freshness, and behavioral changes;
-- publish a new database atomically while retaining the last known-good file.
+## Current status
 
-## Design goals
+| Command | Status |
+| --- | --- |
+| `build` | Operational |
+| `inspect` | Operational |
+| `publish` | Operational |
+| `compare` | Not implemented |
+| `verify` | Not implemented |
 
-- Keep all request-time geolocation local to the Traefik process.
-- Produce reproducible output from identical inputs and configuration.
-- Treat IPv4 and IPv6 as equal, first-class inputs.
-- Separate memory optimization from accuracy experiments.
-- Preserve primary-source values unless a configured policy says otherwise.
-- Fail before publication when an input, override, or output is invalid.
-- Produce machine-readable reports suitable for a Kubernetes CronJob.
-- Keep source credentials and licensed data out of generated logs and Git.
+`build` creates a temporary, verified candidate. `inspect` verifies project
+metadata and structure and performs at most 32 selected lookups. `publish`
+copies, hashes, and independently reverifies a temporary artifact before it
+atomically creates, replaces, or leaves unchanged a stable artifact.
+Publication creates no backup and does not delete the candidate.
 
-## Non-goals
+## Requirements
 
-- Running a geolocation HTTP, gRPC, SQL, MongoDB, or Redis service.
-- Performing network lookups from the Traefik middleware.
-- Replacing provider licenses or determining geographic truth by voting alone.
-- Embedding access-control policy into geographic source data.
-- Deploying directly to a live cluster from the CLI.
-- Shipping source or generated production databases in this repository.
+- Go 1.26 or newer to build from source.
+- macOS or Linux for local atomic publication.
+- Make, optionally, for the convenience targets below.
+- One locally acquired MaxMind City MMDB.
+- Enough local memory for a full City build.
+- Trusted operator-owned workspace and destination directories, with one
+  publisher at a time per destination.
 
-## Planned pipeline
+The reported real-data measurements used a GeoLite dataset with approximately
+5.8 million normalized networks. Compilation used roughly 2.7 GiB peak resident
+memory on the tested Apple Silicon machine and Linux container. Allow at least
+approximately 4 GiB for operational headroom in the current full-build
+workflow; that recommendation is not a measured minimum. These figures are
+observations from specific data, machines, and measurement conditions, not
+stable guarantees. Memory optimization is deferred.
 
-```mermaid
-flowchart LR
-    MM["MaxMind GeoLite2 City"] --> ACQ["Acquisition"]
-    DBIP["Optional secondary MMDB"] --> ACQ
-    ACQ --> VERIFY["Input verification"]
-    VERIFY --> NORMALIZE["Schema normalization"]
-    NORMALIZE --> COMPARE["Comparison and merge policy"]
-    OVERRIDES["Reviewed CIDR corrections"] --> COMPARE
-    COMPARE --> WRITE["Minimal MMDB writer"]
-    WRITE --> GATE["Behavior and quality gates"]
-    GATE --> PUBLISH["Atomic publication"]
-    PUBLISH --> PVC["Cluster database volume"]
-    PVC --> TRAEFIK["Traefik local lookup"]
-```
+## Data acquisition boundary
 
-See [Architecture](docs/ARCHITECTURE.md) for component boundaries, data flow,
-merge rules, failure behavior, and Kubernetes integration.
+Source acquisition is outside `stategeodb`. Use MaxMind's supported
+[GeoIP Update or download workflow](https://dev.maxmind.com/geoip/updating-databases/)
+and keep credentials out of repository files.
 
-## Planned command surface
+- Do not commit production source MMDBs or generated production artifacts.
+- Keep account IDs, license keys, authenticated URLs, and `GeoIP.conf` private.
+- This repository contains only approved upstream test fixtures documented in
+  [testdata/README.md](testdata/README.md).
+
+The repository does not provide source-download automation.
+
+## Build the CLI
 
 ```text
-stategeodb build     Compile normalized sources and overrides into an MMDB
-stategeodb compare   Report coverage and disagreement without publishing
-stategeodb verify    Validate source or generated artifacts and quality gates
-stategeodb inspect   Print metadata and selected lookups for diagnostics
-stategeodb publish   Publish an already built and verified candidate artifact
+make build
 ```
 
-`build` will create and verify a candidate artifact but will never replace the
-stable published artifact. `publish` is the only command that will perform
-publication. `compare` will not merge or publish, `inspect` will remain bounded
-to metadata and explicitly selected lookups, and `publish` will not compile
-sources.
+The executable is written to:
 
-All commands will follow normal Unix automation conventions:
+```text
+dist/bin/stategeodb
+```
 
-- structured output is written to stdout;
-- diagnostics are written to stderr;
-- non-zero exit codes identify usage, input, validation, or publication errors;
-- commands accept cancellation and avoid partial output publication;
-- human-readable and JSON output are explicitly selectable.
+The corresponding raw Go build is:
 
-## Initial source policy
+```text
+go build -o dist/bin/stategeodb ./cmd/stategeodb
+```
 
-The first production compiler will use GeoLite2 City as the sole authoritative
-source. A second source may initially be used only for comparison.
+Unlike `make build`, the raw command does not reject symlinked `dist` paths. Use
+it only in a trusted worktree.
 
-When fallback merging is later enabled, the default policy will be:
+## Local v1 workflow
 
-1. Keep a non-empty primary country.
-2. Fill a missing primary country from the secondary source.
-3. Keep a non-empty primary subdivision.
-4. Fill a missing primary subdivision only when both sources agree on country.
-5. Keep the primary value on conflicts and report the disagreement.
-6. Apply reviewed CIDR location corrections after source merging.
+### Prepare directories
 
-This policy improves missing coverage without silently replacing known primary
-values. More aggressive consensus policies require separate evidence and are
-outside the initial release.
+```text
+mkdir -p tmp/work
+```
 
-## Scheduled operation
+The CLI requires `--workspace-root` to name an existing absolute directory, so
+the examples below use `"$PWD/tmp/work"`.
 
-The intended Kubernetes pattern is one builder CronJob per cluster:
+### Choose a build epoch
 
-1. The official MaxMind updater downloads or checks the current source.
-2. Optional source adapters acquire their databases.
-3. `stategeodb build` verifies inputs and compiles a candidate in temporary
-   storage.
-4. The candidate is reopened, structurally verified, and compared with the
-   current artifact.
-5. The build emits a checksum, provenance manifest, and comparison report.
-6. A separate `stategeodb publish` invocation replaces the stable MMDB path
-   using an atomic same-filesystem rename.
-7. Traefik detects the new file and swaps to the validated reader.
+`--build-epoch` is an explicit positive Unix timestamp embedded in the output
+artifact. For an ad hoc build, obtain one with:
 
-Individual Traefik pods must not independently download or compile databases.
-The scheduler publishes one reviewed generation for all consumers of the
-cluster volume.
+```text
+date +%s
+```
 
-## Data and licensing
+Using the same logical source and the same build epoch supports byte-identical
+reproduction. Preserve a fixed value when reproducibility matters.
 
-This repository contains code, documentation, and a small reviewed set of
-upstream test fixtures. Production source and generated MMDB files are ignored
-by Git.
+### Build a candidate
 
-Operators are responsible for satisfying the terms of every configured data
-source, including attribution, update, internal-use, and redistribution
-requirements. Transforming or combining datasets does not remove those
-obligations.
+```text
+dist/bin/stategeodb build \
+  --source tmp/real/GeoLite2-City.mmdb \
+  --source-id geolite2-city \
+  --workspace-root "$PWD/tmp/work" \
+  --build-epoch <unix-seconds>
+```
 
-Relevant upstream projects and terms include:
+Successful output contains exactly these six keys:
 
-- [MaxMind GeoLite databases](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/)
-- [MaxMind GeoIP Update](https://dev.maxmind.com/geoip/updating-databases/)
-- [MaxMind MMDB writer](https://github.com/maxmind/mmdbwriter)
-- [maxminddb-golang reader](https://github.com/oschwald/maxminddb-golang)
-- [DB-IP Lite databases](https://db-ip.com/db/lite.php)
+```text
+candidate_path
+input_records
+output_networks
+compared_segments
+size_bytes
+build_epoch
+```
 
-Generated database artifacts must not be published or committed unless their
-complete source-license obligations have been reviewed.
+`candidate_path` identifies the verified MMDB. The candidate remains in its
+private workspace after success; capture the value without evaluating the
+output as shell code.
 
-## Repository documentation
+### Inspect a candidate
 
-- [Architecture](docs/ARCHITECTURE.md): committed technical design and durable
-  decisions.
-- `AGENTS.md`: committed development and verification conventions.
-- `docs/PHASES.md`: local implementation plan; intentionally ignored.
-- `docs/phases/`: local phase execution prompts; intentionally ignored.
+Metadata only:
 
-The private phase files are kept outside Git so implementation planning can be
-iterated without publishing operational research in the public repository.
+```text
+dist/bin/stategeodb inspect \
+  --database <candidate_path>
+```
+
+Selected IPv4 and IPv6 lookups:
+
+```text
+dist/bin/stategeodb inspect \
+  --database <candidate_path> \
+  --ip 8.8.8.8 \
+  --ip 2001:4860:4860::8888
+```
+
+Inspection requires exact stategeodb schema-v1 metadata. It never performs a
+full data dump.
+
+### Publish the stable local artifact
+
+```text
+make publish-artifact CANDIDATE="<candidate_path>"
+```
+
+The default destination is:
+
+```text
+dist/artifacts/stategeodb.mmdb
+```
+
+Publication reports one of three actions:
+
+- absent destination: `created`;
+- exact same bytes: `unchanged`;
+- different verified bytes: `replaced`.
+
+Replacement uses a verified temporary sibling and an atomic rename on the
+supported local macOS and Linux filesystems. The current publisher has no
+cross-process lock: use an operator-owned destination parent and serialize
+publication per destination. No backup is created, and the candidate is
+retained.
+
+The explicit CLI equivalent is:
+
+```text
+dist/bin/stategeodb publish \
+  --candidate <candidate_path> \
+  --destination dist/artifacts/stategeodb.mmdb
+```
+
+When using the CLI directly, create `dist/artifacts` first; `publish` requires
+the destination parent directory to exist.
+
+### Inspect the stable artifact
+
+```text
+make inspect-artifact
+```
+
+For a selected lookup:
+
+```text
+dist/bin/stategeodb inspect \
+  --database dist/artifacts/stategeodb.mmdb \
+  --ip 8.8.8.8
+```
+
+### Transfer boundary
+
+Copying or synchronizing the artifact into a Longhorn PVC is outside this
+repository. The stable output can be consumed by a separate trusted
+synchronization workflow, but `stategeodb` does not currently provide or claim
+Kubernetes manifests, Longhorn synchronization, Traefik reload orchestration,
+or cluster rollback.
+
+## Integrity and safety guarantees
+
+The implemented workflow provides these bounded guarantees when the workspace
+and publication directories are exclusively controlled by the operator during
+an invocation, candidate and temporary files are not concurrently modified,
+and publication is serialized per destination:
+
+- supported source metadata and MMDB structure are verified before ingestion;
+- the normalized model and compiler cover native IPv4 and IPv6, including
+  canonical mapped-IPv4 handling;
+- output uses the fixed minimal schema;
+- identical logical input and a fixed build epoch produce byte-identical MMDB
+  output;
+- complete interval-based source/output lookup equivalence is checked;
+- a failed compile returns no candidate and attempts name-scoped cleanup inside
+  the bound workspace root;
+- inspection output is bounded to metadata and at most 32 addresses;
+- publication copies, hashes, and verifies a temporary artifact before commit;
+- exact byte comparison determines no-op publication;
+- a temporary sibling plus rename prevents partial destination visibility;
+- normal CLI diagnostics redact paths and raw parser details;
+- process status is `0` for success and `1` for failure.
+
+Atomic replacement depends on supported local macOS/Linux filesystem semantics.
+The publisher syncs the temporary file but does not claim directory-entry
+power-loss durability. Command stdout is trustworthy only with status `0`; an
+output-write failure may leave a partial result.
+
+## Current limitations
+
+- One City source per build.
+- Only exact `GeoLite2-City` and `GeoIP2-City` source types.
+- No Enterprise support.
+- No custom corrections or overrides.
+- No secondary-source comparison or merging.
+- No standalone `verify` operation.
+- No JSON reports or manifests.
+- No source acquisition.
+- No automatic candidate cleanup after a successful build.
+- No backup or rollback.
+- No Kubernetes or PVC synchronization.
+- High builder memory use.
+- Publication only on macOS and Linux.
+- Output schema fixed to project schema v1.
+
+## Development
+
+```text
+make help
+make check
+make build
+make artifact-path
+```
+
+`make check` runs formatting checks, module consistency checks, uncached normal
+tests, race-enabled tests, `go vet`, and a CLI build. Generated outputs live
+under ignored `dist/`; private local inputs and workspaces live under ignored
+`tmp/`. Tests use approved fixtures and synthetic data and do not require a
+production GeoLite database.
+
+## Future development
+
+See the [public roadmap](docs/ROADMAP.md). The next priority is reviewed custom
+CIDR location corrections, followed by independent verification and reporting,
+then cautious secondary-source research.
+
+## Architecture and licensing
+
+- [Implemented architecture](docs/ARCHITECTURE.md)
+- [Public roadmap](docs/ROADMAP.md)
+- [Test fixture provenance](testdata/README.md)
+- [MaxMind GeoLite data and licensing resources](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/)
+- [MaxMind database update guidance](https://dev.maxmind.com/geoip/updating-databases/)
+- [Pinned MaxMind DB reader](https://github.com/oschwald/maxminddb-golang/tree/v2.4.1)
+- [Pinned MaxMind MMDB writer](https://github.com/maxmind/mmdbwriter/tree/v1.2.0)
+
+Operators remain responsible for source-license, update, attribution, and
+redistribution obligations. Transforming a database does not grant new
+redistribution rights.

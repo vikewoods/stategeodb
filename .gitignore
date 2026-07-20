@@ -1,7 +1,3 @@
-# Private planning and execution prompts
-docs/PHASES.md
-docs/phases/
-
 # Local build output and generated data
 /bin/
 /dist/
