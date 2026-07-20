@@ -32,6 +32,7 @@ func TestRun_RootHelpForms(t *testing.T) {
 		"stategeodb help",
 		"stategeodb --version",
 		"The build, inspect, and publish commands are operational.",
+		"retain country globally and first subdivision only for US records",
 	}
 	for _, content := range stableContent {
 		if !strings.Contains(expectedHelp, content) {
@@ -125,7 +126,7 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 	}{
 		{
 			name:     "build",
-			contains: []string{"one local City MMDB", "verified candidate artifact", "does not publish or replace", "separate publish command"},
+			contains: []string{"one local City MMDB", "verified candidate artifact", "fixed compliance profile", "country globally", "first subdivision only for US records", "does not publish or replace", "separate publish command"},
 			excludes: []string{"configured", "JSON", "not implemented"},
 		},
 		{
@@ -138,7 +139,7 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 		},
 		{
 			name:     "inspect",
-			contains: []string{"bounded metadata", "explicitly selected lookups", "never prints or dumps", "--database", "--ip", "32", "generated stategeodb artifacts"},
+			contains: []string{"bounded metadata", "explicitly selected lookups", "never prints or dumps", "--database", "--ip", "32", "generated stategeodb compliance artifacts", "country globally", "first subdivision only for US records"},
 		},
 		{
 			name:     "publish",

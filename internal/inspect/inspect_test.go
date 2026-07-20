@@ -16,6 +16,7 @@ import (
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
@@ -154,6 +155,7 @@ func TestInspect_RejectsUnsupportedMetadata(t *testing.T) {
 	}{
 		{name: "source city", databaseType: "GeoLite2-City", description: "GeoLite2 City database"},
 		{name: "project type", databaseType: "StateGeo-Unknown", description: mmdb.SchemaDescription},
+		{name: "old generic identity", databaseType: "StateGeo-Country-Subdivision", description: "stategeodb country/subdivision schema v1"},
 		{name: "schema", databaseType: mmdb.DatabaseType, description: "stategeodb incompatible schema"},
 	}
 	for _, test := range tests {
@@ -211,6 +213,26 @@ func TestInspect_PreservesMalformedLocationClassification(t *testing.T) {
 	})
 	if !errors.Is(err, ErrLookup) || !errors.Is(err, source.ErrInvalidCountry) {
 		t.Errorf("Inspect() error = %v, want ErrLookup and ErrInvalidCountry", err)
+	}
+}
+
+func TestInspect_RejectsSelectedNonUSSubdivision(t *testing.T) {
+	path := writeCustomDatabaseWithSubdivision(
+		t,
+		mmdb.DatabaseType,
+		mmdb.SchemaDescription,
+		"GB",
+		"ENG",
+		mmdb.RecordSize,
+	)
+	_, err := Inspect(t.Context(), Request{
+		DatabasePath: path,
+		Addresses:    []netip.Addr{netip.MustParseAddr("192.0.2.1")},
+	})
+	for _, target := range []error{ErrLookup, artifactprofile.ErrInvalidRecord} {
+		if !errors.Is(err, target) {
+			t.Errorf("Inspect() error = %v, want errors.Is(%v)", err, target)
+		}
 	}
 }
 
@@ -301,6 +323,25 @@ func writeCustomDatabase(
 	recordSize int,
 ) string {
 	t.Helper()
+	return writeCustomDatabaseWithSubdivision(
+		t,
+		databaseType,
+		description,
+		country,
+		"",
+		recordSize,
+	)
+}
+
+func writeCustomDatabaseWithSubdivision(
+	t *testing.T,
+	databaseType string,
+	description string,
+	country string,
+	subdivision string,
+	recordSize int,
+) string {
+	t.Helper()
 	tree, err := mmdbwriter.New(mmdbwriter.Options{
 		BuildEpoch:              testBuildEpoch,
 		DatabaseType:            databaseType,
@@ -314,6 +355,11 @@ func writeCustomDatabase(
 		t.Fatalf("mmdbwriter.New() error = %v", err)
 	}
 	value := mmdbtype.Map{"country": mmdbtype.Map{"iso_code": mmdbtype.String(country)}}
+	if subdivision != "" {
+		value["subdivisions"] = mmdbtype.Slice{
+			mmdbtype.Map{"iso_code": mmdbtype.String(subdivision)},
+		}
+	}
 	if err := tree.Insert(prefixNetwork(netip.MustParsePrefix("192.0.2.0/24")), value); err != nil {
 		t.Fatalf("Insert() error = %v", err)
 	}

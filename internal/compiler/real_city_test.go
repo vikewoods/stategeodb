@@ -35,10 +35,13 @@ type realCitySource struct {
 }
 
 type realCityCandidateObservation struct {
-	inputRecords     int
-	outputNetworks   int
-	comparedSegments int
-	candidateSize    int64
+	inputRecords               int
+	usSubdivisionsRetained     int
+	nonUSSubdivisionsRemoved   int
+	recordsWithoutSubdivisions int
+	outputNetworks             int
+	comparedSegments           int
+	candidateSize              int64
 }
 
 func TestCompileRealCity(t *testing.T) {
@@ -72,23 +75,28 @@ func TestCompileRealCity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifyRealCityCandidate(t, candidate, source.buildEpoch)
+	nodeCount := verifyRealCityCandidate(t, candidate, source.buildEpoch)
 	if err := cleanupRealCityCandidate(candidate); err != nil {
 		t.Fatalf("candidate cleanup failed: %v", err)
 	}
 
 	t.Logf(
 		"real City source: basename=%q sha256=%s source_bytes=%d build_epoch=%d "+
-			"database_type=%q input_records=%d output_networks=%d "+
-			"compared_segments=%d candidate_bytes=%d",
+			"database_type=%q input_records=%d us_subdivisions_retained=%d "+
+			"non_us_subdivisions_removed=%d records_without_subdivisions=%d output_networks=%d "+
+			"compared_segments=%d node_count=%d candidate_bytes=%d",
 		source.baseName,
 		source.checksum,
 		source.size,
 		source.buildEpoch,
 		source.databaseType,
 		observation.inputRecords,
+		observation.usSubdivisionsRetained,
+		observation.nonUSSubdivisionsRemoved,
+		observation.recordsWithoutSubdivisions,
 		observation.outputNetworks,
 		observation.comparedSegments,
+		nodeCount,
 		observation.candidateSize,
 	)
 }
@@ -147,6 +155,9 @@ func BenchmarkCompileRealCity(b *testing.B) {
 		b.Fatal("benchmark completed without a compile iteration")
 	}
 	b.ReportMetric(float64(observed.inputRecords), "input_records/op")
+	b.ReportMetric(float64(observed.usSubdivisionsRetained), "us_subdivisions_retained/op")
+	b.ReportMetric(float64(observed.nonUSSubdivisionsRemoved), "non_us_subdivisions_removed/op")
+	b.ReportMetric(float64(observed.recordsWithoutSubdivisions), "records_without_subdivisions/op")
 	b.ReportMetric(float64(observed.outputNetworks), "output_networks/op")
 	b.ReportMetric(float64(observed.comparedSegments), "compared_segments/op")
 	b.ReportMetric(float64(source.size), "source_bytes/op")
@@ -355,12 +366,22 @@ func observeRealCityCandidate(
 	if stats.ComparedSegments < stats.SourceRecords || stats.ComparedSegments < stats.OutputNetworks {
 		return realCityCandidateObservation{}, errors.New("candidate compared segments do not cover both streams")
 	}
+	profileStats := candidate.profileStats
+	if profileStats.processed != candidate.InputRecordCount() ||
+		profileStats.usSubdivisionsRetained+
+			profileStats.nonUSSubdivisionsRemoved+
+			profileStats.recordsWithoutSubdivisions != profileStats.processed {
+		return realCityCandidateObservation{}, errors.New("candidate profile statistics are inconsistent")
+	}
 
 	return realCityCandidateObservation{
-		inputRecords:     candidate.InputRecordCount(),
-		outputNetworks:   stats.OutputNetworks,
-		comparedSegments: stats.ComparedSegments,
-		candidateSize:    candidate.Size(),
+		inputRecords:               candidate.InputRecordCount(),
+		usSubdivisionsRetained:     profileStats.usSubdivisionsRetained,
+		nonUSSubdivisionsRemoved:   profileStats.nonUSSubdivisionsRemoved,
+		recordsWithoutSubdivisions: profileStats.recordsWithoutSubdivisions,
+		outputNetworks:             stats.OutputNetworks,
+		comparedSegments:           stats.ComparedSegments,
+		candidateSize:              candidate.Size(),
 	}, nil
 }
 
@@ -382,7 +403,7 @@ func cleanupRealCityCandidate(candidate *Candidate) error {
 	return nil
 }
 
-func verifyRealCityCandidate(t *testing.T, candidate *Candidate, buildEpoch int64) {
+func verifyRealCityCandidate(t *testing.T, candidate *Candidate, buildEpoch int64) uint {
 	t.Helper()
 	candidatePath := candidate.Path()
 	if candidatePath == "" {
@@ -402,10 +423,12 @@ func verifyRealCityCandidate(t *testing.T, candidate *Candidate, buildEpoch int6
 	}
 	assertCandidateMetadata(t, database.Metadata, buildEpoch)
 	assertRealCityRuntimeSchema(t, database)
+	return database.Metadata.NodeCount
 }
 
 func assertRealCityRuntimeSchema(t *testing.T, database *maxminddb.Reader) {
 	t.Helper()
+	var hasUSSubdivision, hasNonUSCountry, hasUnknownLocation bool
 	for result := range database.Networks() {
 		if result.Err() != nil {
 			t.Fatal("candidate traversal failed during runtime-schema validation")
@@ -419,12 +442,32 @@ func assertRealCityRuntimeSchema(t *testing.T, database *maxminddb.Reader) {
 			t.Fatal("candidate record failed raw-schema decoding")
 		}
 		if len(raw) == 0 {
+			hasUnknownLocation = true
 			continue
 		}
 		assertMinimalRuntimeMap(t, raw)
-		return
+		subdivision := ""
+		if len(runtimeValue.Subdivisions) > 0 {
+			subdivision = runtimeValue.Subdivisions[0].ISOCode
+		}
+		if runtimeValue.Country.ISOCode != "US" && subdivision != "" {
+			t.Fatal("candidate retained a non-US subdivision")
+		}
+		if runtimeValue.Country.ISOCode == "US" && subdivision != "" {
+			hasUSSubdivision = true
+		}
+		if runtimeValue.Country.ISOCode != "" && runtimeValue.Country.ISOCode != "US" {
+			hasNonUSCountry = true
+		}
 	}
-	t.Fatal("candidate contains no non-empty runtime record")
+	if !hasUSSubdivision || !hasNonUSCountry || !hasUnknownLocation {
+		t.Fatalf(
+			"candidate sample coverage = US subdivision %t, non-US country %t, unknown location %t",
+			hasUSSubdivision,
+			hasNonUSCountry,
+			hasUnknownLocation,
+		)
+	}
 }
 
 func assertMinimalRuntimeMap(t *testing.T, raw map[string]any) {

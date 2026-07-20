@@ -102,6 +102,47 @@ func TestPublish_RejectsLegacyCandidateWithAbsentDestination(t *testing.T) {
 	assertNoPublicationArtifacts(t, destinationDirectory)
 }
 
+func TestPublish_RejectsUnsupportedProfileWithAbsentDestination(t *testing.T) {
+	tests := []struct {
+		name      string
+		candidate func(*testing.T, string) string
+	}{
+		{name: "old generic identity", candidate: oldGenericCandidate},
+		{name: "non-US subdivision", candidate: func(t *testing.T, directory string) string {
+			return runtimeIncompatibleCandidate(t, directory, mmdbtype.Map{
+				"country": mmdbtype.Map{"iso_code": mmdbtype.String("GB")},
+				"subdivisions": mmdbtype.Slice{
+					mmdbtype.Map{"iso_code": mmdbtype.String("ENG")},
+				},
+			})
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidateDirectory := t.TempDir()
+			destinationDirectory := t.TempDir()
+			candidate := test.candidate(t, candidateDirectory)
+			candidateBefore := readFile(t, candidate)
+			destination := filepath.Join(destinationDirectory, "stategeo.mmdb")
+
+			result, err := Publish(t.Context(), Request{
+				CandidatePath:   candidate,
+				DestinationPath: destination,
+			})
+			if result != (Result{}) || !errors.Is(err, ErrVerify) ||
+				!errors.Is(err, artifact.ErrUnsupported) {
+				t.Errorf("Publish() = %+v/%v, want zero/ErrVerify/ErrUnsupported", result, err)
+			}
+			if _, statErr := os.Lstat(destination); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("Lstat(destination) error = %v, want os.ErrNotExist", statErr)
+			}
+			assertCandidateUnchanged(t, candidate, candidateBefore)
+			assertNoPublicationArtifacts(t, destinationDirectory)
+		})
+	}
+}
+
 func TestPublish_IdenticalDestinationIsUnchanged(t *testing.T) {
 	candidateDirectory := t.TempDir()
 	destinationDirectory := t.TempDir()
@@ -765,7 +806,16 @@ func TestPublish_RejectsInvalidCandidateWithoutChangingDestination(t *testing.T)
 				"US",
 			)
 		}, expected: ErrVerify, secondary: artifact.ErrUnsupported},
+		{name: "old generic identity", candidate: oldGenericCandidate, expected: ErrVerify, secondary: artifact.ErrUnsupported},
 		{name: "incompatible schema", candidate: incompatibleCandidate, expected: ErrVerify, secondary: artifact.ErrUnsupported},
+		{name: "non-US subdivision", candidate: func(t *testing.T, directory string) string {
+			return runtimeIncompatibleCandidate(t, directory, mmdbtype.Map{
+				"country": mmdbtype.Map{"iso_code": mmdbtype.String("GB")},
+				"subdivisions": mmdbtype.Slice{
+					mmdbtype.Map{"iso_code": mmdbtype.String("ENG")},
+				},
+			})
+		}, expected: ErrVerify, secondary: artifact.ErrUnsupported},
 		{name: "wrong country type", candidate: func(t *testing.T, directory string) string {
 			return runtimeIncompatibleCandidate(t, directory, mmdbtype.Map{
 				"country": mmdbtype.Map{"iso_code": mmdbtype.Uint32(1)},
@@ -794,7 +844,7 @@ func TestPublish_RejectsInvalidCandidateWithoutChangingDestination(t *testing.T)
 			destinationDirectory := t.TempDir()
 			candidate := test.candidate(t, candidateDirectory)
 			var candidateBefore []byte
-			if test.name == "legacy record size" {
+			if info, infoErr := os.Lstat(candidate); infoErr == nil && info.Mode().IsRegular() {
 				candidateBefore = readFile(t, candidate)
 			}
 			destination := writeCandidate(t, destinationDirectory, "stategeo.mmdb", testBuildEpoch, "US")
@@ -969,6 +1019,39 @@ func incompatibleCandidate(t *testing.T, directory string) string {
 		BuildEpoch:              testBuildEpoch,
 		DatabaseType:            mmdb.DatabaseType,
 		Description:             map[string]string{"en": "stategeodb incompatible schema"},
+		IncludeReservedNetworks: true,
+		IPVersion:               6,
+		Languages:               []string{},
+		RecordSize:              mmdb.RecordSize,
+	})
+	if err != nil {
+		t.Fatalf("mmdbwriter.New() error = %v", err)
+	}
+	value := mmdbtype.Map{"country": mmdbtype.Map{"iso_code": mmdbtype.String("US")}}
+	if err := tree.Insert(prefixNetwork(netip.MustParsePrefix("192.0.2.0/24")), value); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	path := filepath.Join(directory, "candidate.mmdb")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := tree.WriteTo(file); err != nil {
+		_ = file.Close()
+		t.Fatalf("WriteTo() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	return path
+}
+
+func oldGenericCandidate(t *testing.T, directory string) string {
+	t.Helper()
+	tree, err := mmdbwriter.New(mmdbwriter.Options{
+		BuildEpoch:              testBuildEpoch,
+		DatabaseType:            "StateGeo-Country-Subdivision",
+		Description:             map[string]string{"en": "stategeodb country/subdivision schema v1"},
 		IncludeReservedNetworks: true,
 		IPVersion:               6,
 		Languages:               []string{},

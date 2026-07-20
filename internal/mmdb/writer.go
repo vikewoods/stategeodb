@@ -1,4 +1,4 @@
-// Package mmdb encodes normalized source records as minimal MaxMind DB files.
+// Package mmdb encodes compliance-profile records as minimal MaxMind DB files.
 package mmdb
 
 import (
@@ -12,6 +12,7 @@ import (
 	"github.com/maxmind/mmdbwriter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
 
@@ -22,10 +23,10 @@ const (
 	RecordSize = 24
 	// DatabaseType identifies the runtime record shape. Incompatible runtime
 	// record changes require a new database type.
-	DatabaseType = "StateGeo-Country-Subdivision"
+	DatabaseType = "StateGeo-Country-USSubdivision"
 	// SchemaDescription identifies compatible revisions of DatabaseType.
 	// Compatible schema changes retain DatabaseType and increment this version.
-	SchemaDescription = "stategeodb country/subdivision schema v1"
+	SchemaDescription = "stategeodb country with US subdivision schema v1"
 )
 
 var (
@@ -60,7 +61,7 @@ func Write(destination io.Writer, records []source.Record, options Options) (int
 	ipv4Storage := netip.MustParsePrefix("::/96")
 	needsIPv4Restore := false
 	for _, record := range sortedRecords {
-		if err := record.Validate(); err != nil {
+		if err := artifactprofile.Validate(record); err != nil {
 			return 0, invalidRecordError{cause: err}
 		}
 		if record.Prefix.Addr().Is6() && record.Prefix.Bits() >= ipv4Storage.Bits() &&

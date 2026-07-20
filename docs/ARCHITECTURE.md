@@ -62,31 +62,45 @@ databases, captures metadata without retaining caller paths, traverses the
 default effective network view, decodes only country and first-subdivision
 codes, and returns an all-or-nothing normalized record slice.
 
+### `internal/artifactprofile`
+
+Owns the fixed compliance projection and validation rule. It validates complete
+normalized source records, preserves country and unknown-location presence, and
+retains the first subdivision only when country is `US`. Projection operates on
+value copies and contains no access-control policy.
+
 ### `internal/mmdb`
 
-Owns deterministic encoding of normalized records with the fixed runtime
-schema and metadata constants. It sorts a copy of the input, rejects duplicate
-prefixes and writer alias-region conflicts, and uses the pinned MaxMind writer.
+Owns deterministic encoding of compliance-profile records with the fixed
+runtime schema and metadata constants. It validates rather than transforms its
+input, so an unprojected non-US subdivision is rejected. It sorts a copy of the
+input, rejects duplicate prefixes and writer alias-region conflicts, and uses
+the pinned MaxMind writer.
 
 ### `internal/compiler`
 
 Coordinates a single-source build. It validates the request, owns the private
-workspace, closes the source before output creation, writes and syncs the
-candidate, verifies its identity and structure, proves exact lookup
-equivalence, and returns candidate ownership only on complete success.
+workspace, closes the source, projects the compiler-owned record slice in place
+before workspace creation, writes and syncs the candidate, verifies its
+identity and structure, proves exact lookup equivalence against the projected
+records, and returns candidate ownership only on complete success. Bounded
+internal projection statistics distinguish processed records, retained US
+subdivisions, removed non-US subdivisions, and records already lacking a
+subdivision.
 
 ### `internal/artifact`
 
-Validates exact project metadata and the normalized country/subdivision fields
-decoded from every traversed runtime record. It does not currently reject
-unknown record fields. It is the reusable artifact-verification boundary used
-during publication.
+Validates exact project metadata and the compliance profile of every traversed
+runtime record. It rejects non-US subdivisions as unsupported. It does not
+currently reject unknown record fields. It is the reusable
+artifact-verification boundary used during publication.
 
 ### `internal/inspect`
 
 Requires exact project metadata, performs full structural verification, and
 returns fixed metadata plus no more than 32 explicitly requested address
-lookups. Matching metadata is a compatibility check, not proof of origin.
+lookups. Each selected record is validated against the compliance profile.
+Matching metadata is a compatibility check, not proof of origin.
 
 ### `internal/publish`
 
@@ -165,6 +179,11 @@ Compiler-generated records contain only this data-bearing runtime shape:
 }
 ```
 
+That subdivision-bearing shape is valid only when `country.iso_code` is `US`.
+Known non-US records contain only `country.iso_code`. The projection matches
+the middleware decision order: known non-US traffic is decided from country
+before US subdivision policy is evaluated.
+
 An unknown-location network is encoded as an empty map. It remains a
 data-bearing prefix and is distinct from an address with no matching prefix.
 Country is omitted when unknown; subdivisions are omitted when unknown.
@@ -173,9 +192,9 @@ Generated metadata and the logical schema identity are fixed as follows:
 
 | Field | Contract |
 | --- | --- |
-| Database type | `StateGeo-Country-Subdivision` |
+| Database type | `StateGeo-Country-USSubdivision` |
 | Logical schema version reported by the CLI | `1` |
-| Description | `stategeodb country/subdivision schema v1` |
+| Description | `stategeodb country with US subdivision schema v1` |
 | Build epoch | caller-supplied positive Unix timestamp |
 | Binary format | `2.0` |
 | IP version | `6` |
@@ -190,10 +209,16 @@ type; a compatible revision retains the type and advances the logical version
 and description together.
 
 The artifact verifier requires record size 24 for schema-v1 artifacts. The
-verifier decodes and validates the required normalized fields in every record
-but does not prove that unknown map fields or additional subdivision elements
-are absent. Publication therefore assumes candidates come from a trusted
-`stategeodb build` workflow.
+verifier decodes and validates the required normalized fields and compliance
+profile in every record but does not prove that unknown map fields or
+additional subdivision elements are absent. The former generic database type
+and description are deliberately unsupported; there is no artifact migration
+or compatibility path. Publication therefore assumes candidates come from a
+trusted current `stategeodb build` workflow.
+
+A future generic all-country-subdivision profile would be a distinct runtime
+contract and must use a different database identity rather than weakening this
+profile.
 
 ## Build and equivalence lifecycle
 
@@ -201,17 +226,19 @@ are absent. Publication therefore assumes candidates come from a trusted
    epoch, and existing absolute non-symlink workspace root.
 2. Bind the workspace-root identity through `os.Root`.
 3. Open and structurally verify the source, ingest every normalized record,
-   then close the source before creating a workspace.
-4. Create a random workspace with mode `0700` and a new identity-checked
+   then close the source.
+4. Project the compiler-owned slice in place into the compliance profile,
+   checking cancellation between records. Failure creates no workspace.
+5. Create a random workspace with mode `0700` and a new identity-checked
    `candidate.mmdb` with mode `0600`.
-5. Sort and encode records deterministically, sync and close the candidate, and
+6. Sort and encode records deterministically, sync and close the candidate, and
    validate its size, type, mode, and identity.
-6. Read the identity-bound candidate snapshot, reopen it through the reader,
+7. Read the identity-bound candidate snapshot, reopen it through the reader,
    verify structure and exact metadata, and traverse every output network.
-7. Convert source and output prefixes to inclusive effective-address
+8. Convert projected source and output prefixes to inclusive effective-address
    intervals, reject overlaps, sort by address family and boundaries, and
    compare every covered segment for presence and location equality.
-8. Revalidate the candidate and workspace-root identities, close the root, and
+9. Revalidate the candidate and workspace-root identities, close the root, and
    return candidate ownership.
 
 Interval comparison proves effective lookup equivalence, not identical prefix
@@ -304,11 +331,15 @@ durability claim.
   verification.
 - Native IPv6 records in the writer's IPv4 storage region are rejected, and
   alias-region insertion failures are build failures.
-- Generated metadata and normalized fields in every runtime record are verified
-  before publication; absence of unknown fields is not currently enforced.
+- Generated metadata and the compliance profile of every runtime record are
+  verified before publication; absence of unknown fields is not currently
+  enforced.
 - Equivalence covers the complete effective IPv4 and IPv6 address intervals
   represented by source and output, including present unknown locations.
 - Compile returns a fully verified candidate or no candidate.
+- Profile projection completes after source close and before workspace
+  creation; cancellation or invalid source records at this stage create no
+  workspace.
 
 Tests cover repeated and cross-process deterministic writer output, shuffled
 input, changed source IDs, both address families, split and compacted prefixes,
@@ -347,15 +378,16 @@ The repository includes the approved 250-record upstream fixture, deterministic
 synthetic compilation benchmarks up to 100,000 records, and an opt-in real City
 test and benchmark.
 
-The reported real GeoLite measurement used approximately 5.8 million normalized
-records. Warm-cache full-compilation benchmark samples took roughly 19–21
-seconds on the tested Apple Silicon machine. Process/container measurements
-reported approximately 2.7 GiB peak resident memory on that host and in the
-tested Linux container. In the measured container configuration, this dataset
-did not complete with 512 MiB or 1 GiB limits. These are observations from
-particular data, hardware, runtime, cache state, and measurement conditions; the
-private source was not available for this documentation task and the results
-are not performance guarantees.
+The current real GeoLite compliance-profile measurement used 5,831,951
+normalized records: 2,739,274 US subdivisions were retained, 1,944,142 non-US
+subdivisions were removed, and 1,148,535 records already lacked a subdivision.
+The output contained 2,412,342 networks, 5,831,951 compared segments, and
+2,736,008 tree nodes. The CLI build took 17.48 seconds and reached
+2,791,964,672 bytes (approximately 2.60 GiB) peak resident memory on the tested
+Apple Silicon machine. Its 16,419,258-byte artifact was 8,056,477 bytes
+(32.92%) smaller than the 24,475,735-byte generic 24-bit baseline built from the
+same source snapshot. These are observations from particular data, hardware,
+runtime, cache state, and measurement conditions, not performance guarantees.
 
 Go benchmark `B/op` reports cumulative allocations per operation, not peak
 resident memory. Peak RSS must be measured at the process or container level.
@@ -387,6 +419,7 @@ cluster deployment, Traefik reload, backup, or rollback responsibility.
 | --- | --- |
 | Invalid build or publish request | No generated candidate and no destination change |
 | Unsupported or corrupt source | No candidate workspace is created |
+| Invalid source record or cancelled profile projection | No candidate workspace is created |
 | Cancelled build | No candidate is returned; root/name-scoped workspace cleanup is attempted |
 | Candidate write or verification failure | No candidate is returned; root/name-scoped workspace cleanup is attempted |
 | Equivalence mismatch | No candidate is returned; root/name-scoped workspace cleanup is attempted |

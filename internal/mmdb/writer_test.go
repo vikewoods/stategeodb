@@ -16,11 +16,14 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
 
 const testBuildEpoch int64 = 1_700_000_000
 
+// runtimeRecord mirrors the plugin's maxminddb tags and intentionally avoids a
+// dependency on the Yaegi-loaded middleware package.
 type runtimeRecord struct {
 	Country struct {
 		ISOCode string `maxminddb:"iso_code"`
@@ -30,9 +33,15 @@ type runtimeRecord struct {
 	} `maxminddb:"subdivisions"`
 }
 
-func TestWriteCompatibility(t *testing.T) {
+func TestWritePluginCompatibility(t *testing.T) {
 	if SchemaVersion != 1 {
 		t.Fatalf("SchemaVersion = %d, want 1", SchemaVersion)
+	}
+	if DatabaseType != "StateGeo-Country-USSubdivision" {
+		t.Fatalf("DatabaseType = %q, want compliance profile identity", DatabaseType)
+	}
+	if SchemaDescription != "stategeodb country with US subdivision schema v1" {
+		t.Fatalf("SchemaDescription = %q, want compliance profile description", SchemaDescription)
 	}
 	records := compatibilityRecords(t)
 	data := writeDatabase(t, records, testBuildEpoch)
@@ -79,6 +88,7 @@ func TestWriteCompatibility(t *testing.T) {
 		{name: "ipv4 middle overlap", address: "10.1.3.1", expectedCountry: "BB"},
 		{name: "ipv4 longest overlap", address: "10.1.2.1", expectedCountry: "CC"},
 		{name: "ipv4 subdivision", address: "192.0.2.1", expectedCountry: "US", expectedSubdivision: "CA"},
+		{name: "ipv4 US without subdivision", address: "203.0.113.1", expectedCountry: "US"},
 		{name: "ipv6 country", address: "2001:db8::1", expectedCountry: "GB"},
 		{name: "data-bearing unknown", address: "198.51.100.1"},
 	}
@@ -195,6 +205,22 @@ func TestWriteCompatibility(t *testing.T) {
 	}
 	if aliasedCount <= len(firstNetworks) {
 		t.Errorf("aliased network count = %d, want greater than default %d", aliasedCount, len(firstNetworks))
+	}
+}
+
+func TestWriteRejectsUnprojectedNonUSSubdivision(t *testing.T) {
+	record := mustRecord(t, "2001:db8::/32", "GB", "ENG", "unprojected")
+	written, err := Write(&bytes.Buffer{}, []source.Record{record}, Options{BuildEpoch: testBuildEpoch})
+	if written != 0 {
+		t.Errorf("Write() bytes = %d, want 0", written)
+	}
+	for _, target := range []error{ErrInvalidInput, artifactprofile.ErrInvalidRecord} {
+		if !errors.Is(err, target) {
+			t.Errorf("Write() error = %v, want errors.Is(%v)", err, target)
+		}
+	}
+	if strings.Contains(err.Error(), record.Country) || strings.Contains(err.Error(), record.Subdivision) {
+		t.Errorf("Write() error exposed record values: %v", err)
 	}
 }
 
@@ -337,7 +363,7 @@ func TestWriteRejectsInvalidInput(t *testing.T) {
 
 func TestWriteRejectsDuplicatePrefixes(t *testing.T) {
 	first := mustRecord(t, "192.0.2.0/24", "US", "CA", "first")
-	second := mustRecord(t, "192.0.2.0/24", "GB", "ENG", "second")
+	second := mustRecord(t, "192.0.2.0/24", "US", "NY", "second")
 	records := []source.Record{second, first}
 	before := slices.Clone(records)
 	written, err := Write(&bytes.Buffer{}, records, Options{BuildEpoch: testBuildEpoch})
@@ -486,6 +512,7 @@ func compatibilityRecords(t *testing.T) []source.Record {
 		mustRecord(t, "10.1.0.0/16", "BB", "", "middle"),
 		mustRecord(t, "10.1.2.0/24", "CC", "", "inner"),
 		mustRecord(t, "192.0.2.0/24", "US", "CA", "subdivision"),
+		mustRecord(t, "203.0.113.0/24", "US", "", "us-country"),
 		mustRecord(t, "2001:db8::/32", "GB", "", "ipv6"),
 		mustRecord(t, "198.51.100.0/24", "", "", "unknown"),
 	}

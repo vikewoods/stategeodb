@@ -8,6 +8,7 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
@@ -89,6 +90,9 @@ func verifyRuntimeRecords(ctx context.Context, reader *maxminddb.Reader) error {
 			verificationSourceID,
 		)
 		if err != nil || record.Country != rawCountry || record.Subdivision != rawSubdivision {
+			return ErrUnsupported
+		}
+		if err := artifactprofile.Validate(record); err != nil {
 			return ErrUnsupported
 		}
 	}

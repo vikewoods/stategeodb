@@ -14,6 +14,11 @@ import (
 
 const legacyRecordSize = 28
 
+const (
+	oldGenericDatabaseType = "StateGeo-Country-Subdivision"
+	oldGenericDescription  = "stategeodb country/subdivision schema v1"
+)
+
 func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 	valid := maxminddb.Metadata{
 		Description:              map[string]string{"en": mmdb.SchemaDescription},
@@ -34,7 +39,8 @@ func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 		name   string
 		mutate func(*maxminddb.Metadata)
 	}{
-		{name: "database type", mutate: func(metadata *maxminddb.Metadata) { metadata.DatabaseType = "other" }},
+		{name: "old generic database type", mutate: func(metadata *maxminddb.Metadata) { metadata.DatabaseType = oldGenericDatabaseType }},
+		{name: "old generic description", mutate: func(metadata *maxminddb.Metadata) { metadata.Description["en"] = oldGenericDescription }},
 		{name: "description value", mutate: func(metadata *maxminddb.Metadata) { metadata.Description["en"] = "other" }},
 		{name: "extra description", mutate: func(metadata *maxminddb.Metadata) { metadata.Description["fr"] = "other" }},
 		{name: "languages", mutate: func(metadata *maxminddb.Metadata) { metadata.Languages = []string{"en"} }},
@@ -55,6 +61,20 @@ func TestCompatible_RequiresExactRuntimeMetadata(t *testing.T) {
 				t.Error("Compatible(mutated metadata) = true")
 			}
 		})
+	}
+}
+
+func TestVerify_RejectsMalformedComplianceRecord(t *testing.T) {
+	reader := projectReaderWithValue(t, mmdb.RecordSize, mmdbtype.Map{
+		"country": mmdbtype.Map{"iso_code": mmdbtype.String("GB")},
+		"subdivisions": mmdbtype.Slice{
+			mmdbtype.Map{"iso_code": mmdbtype.String("ENG")},
+		},
+	})
+	defer reader.Close()
+
+	if err := Verify(t.Context(), reader); err != ErrUnsupported {
+		t.Errorf("Verify() error = %v, want ErrUnsupported", err)
 	}
 }
 
@@ -91,6 +111,17 @@ func TestVerify_RejectsInvalidInputs(t *testing.T) {
 
 func projectReader(t *testing.T, recordSize int) *maxminddb.Reader {
 	t.Helper()
+	return projectReaderWithValue(t, recordSize, mmdbtype.Map{
+		"country": mmdbtype.Map{"iso_code": mmdbtype.String("US")},
+	})
+}
+
+func projectReaderWithValue(
+	t *testing.T,
+	recordSize int,
+	value mmdbtype.DataType,
+) *maxminddb.Reader {
+	t.Helper()
 	tree, err := mmdbwriter.New(mmdbwriter.Options{
 		BuildEpoch:              1,
 		DatabaseType:            mmdb.DatabaseType,
@@ -104,9 +135,6 @@ func projectReader(t *testing.T, recordSize int) *maxminddb.Reader {
 		t.Fatalf("mmdbwriter.New() error = %v", err)
 	}
 	prefix := &net.IPNet{IP: net.IPv4(192, 0, 2, 0), Mask: net.CIDRMask(24, 32)}
-	value := mmdbtype.Map{
-		"country": mmdbtype.Map{"iso_code": mmdbtype.String("US")},
-	}
 	if err := tree.Insert(prefix, value); err != nil {
 		t.Fatalf("Insert() error = %v", err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 	"github.com/vikewoods/stategeodb/internal/source/maxmind"
@@ -110,6 +111,13 @@ func TestCompile(t *testing.T) {
 	if stats.ComparedSegments < stats.SourceRecords || stats.ComparedSegments < stats.OutputNetworks {
 		t.Errorf("EquivalenceStats() = %+v, compared segments do not cover both streams", stats)
 	}
+	profileStats := candidate.profileStats
+	if profileStats.processed != candidate.InputRecordCount() ||
+		profileStats.usSubdivisionsRetained+
+			profileStats.nonUSSubdivisionsRemoved+
+			profileStats.recordsWithoutSubdivisions != profileStats.processed {
+		t.Errorf("profile stats = %+v, want complete bounded accounting", profileStats)
+	}
 
 	// A rename round trip proves Compile returned without retaining an open file
 	// or verification-reader handle on platforms that forbid renaming open files.
@@ -129,7 +137,7 @@ func TestCompile(t *testing.T) {
 		t.Fatalf("Verify(candidate) error = %v", err)
 	}
 	assertCandidateMetadata(t, database.Metadata, request.BuildEpoch)
-	assertLookup(t, database, "2.2.3.1", true, "GB", "ENG")
+	assertLookup(t, database, "2.2.3.1", true, "GB", "")
 	assertLookup(t, database, "2001:480:10::1", true, "US", "CA")
 	assertLookup(t, database, "2.3.3.1", true, "", "")
 	if err := database.Close(); err != nil {
@@ -152,8 +160,8 @@ func TestCompile(t *testing.T) {
 func TestCompileAcceptsCompactedEquivalentCandidate(t *testing.T) {
 	root := t.TempDir()
 	records := []source.Record{
-		mustRecord(t, "192.0.2.0/25", "US", "CA"),
-		mustRecord(t, "192.0.2.128/25", "US", "CA"),
+		mustRecord(t, "192.0.2.0/25", "GB", "ENG"),
+		mustRecord(t, "192.0.2.128/25", "GB", "SCT"),
 	}
 	operations := defaultOperations()
 	operations.openSource = func(string) (sourceDatabase, error) {
@@ -173,6 +181,9 @@ func TestCompileAcceptsCompactedEquivalentCandidate(t *testing.T) {
 	if stats.SourceRecords != 2 || stats.OutputNetworks != 1 || stats.ComparedSegments != 2 {
 		t.Errorf("EquivalenceStats() = %+v, want 2 source, 1 output, 2 segments", stats)
 	}
+	if candidate.profileStats.nonUSSubdivisionsRemoved != 2 {
+		t.Errorf("profile stats = %+v, want two removed non-US subdivisions", candidate.profileStats)
+	}
 }
 
 func TestCompileRejectsNonEquivalentCandidate(t *testing.T) {
@@ -184,8 +195,15 @@ func TestCompileRejectsNonEquivalentCandidate(t *testing.T) {
 			name: "location mismatch",
 			output: func(t *testing.T) []source.Record {
 				records := testRecords(t)
-				records[0].Country = "GB"
-				records[0].Subdivision = "ENG"
+				records[0].Subdivision = "NY"
+				return records
+			},
+		},
+		{
+			name: "US subdivision dropped",
+			output: func(t *testing.T) []source.Record {
+				records := testRecords(t)
+				records[0].Subdivision = ""
 				return records
 			},
 		},
@@ -613,6 +631,11 @@ func TestCompileSourceLifecycle(t *testing.T) {
 				events:  &events,
 			}, nil
 		}
+		originalProject := operations.project
+		operations.project = func(ctx context.Context, records []source.Record) (projectionStats, error) {
+			events = append(events, "profile")
+			return originalProject(ctx, records)
+		}
 		operations.mkdirTemp = func(root workspaceRoot, pattern string) (string, error) {
 			events = append(events, "workspace")
 			return createWorkspace(root, pattern)
@@ -621,8 +644,8 @@ func TestCompileSourceLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("compile() error = %v", err)
 		}
-		if !slices.Equal(events, []string{"records", "close", "workspace"}) {
-			t.Errorf("events = %v, want records, close, workspace", events)
+		if !slices.Equal(events, []string{"records", "close", "profile", "workspace"}) {
+			t.Errorf("events = %v, want records, close, profile, workspace", events)
 		}
 		if err := candidate.Cleanup(); err != nil {
 			t.Fatalf("Cleanup() error = %v", err)
@@ -651,6 +674,38 @@ func TestCompileSourceLifecycle(t *testing.T) {
 			t.Errorf("workspace calls = %d, want 0", workspaceCalls)
 		}
 	})
+
+	t.Run("profile failure after close creates no workspace", func(t *testing.T) {
+		root := t.TempDir()
+		events := []string{}
+		invalid := testRecords(t)
+		invalid[0].Country = "us"
+		operations := defaultOperations()
+		operations.openSource = func(string) (sourceDatabase, error) {
+			return &fakeSourceDatabase{records: invalid, events: &events}, nil
+		}
+		workspaceCalls := 0
+		operations.mkdirTemp = func(workspaceRoot, string) (string, error) {
+			workspaceCalls++
+			return "", errors.New("unexpected workspace creation")
+		}
+		candidate, err := compile(t.Context(), fixtureRequest(root), operations)
+		if candidate != nil {
+			t.Error("compile() returned a candidate")
+		}
+		for _, target := range []error{ErrProfile, artifactprofile.ErrInvalidRecord, source.ErrInvalidCountry} {
+			if !errors.Is(err, target) {
+				t.Errorf("compile() error = %v, want errors.Is(%v)", err, target)
+			}
+		}
+		if strings.Contains(err.Error(), invalid[0].Country) {
+			t.Errorf("compile() error exposed record value: %v", err)
+		}
+		if !slices.Equal(events, []string{"records", "close"}) || workspaceCalls != 0 {
+			t.Errorf("events/workspace calls = %v/%d, want records, close/0", events, workspaceCalls)
+		}
+		assertNoGeneratedWorkspace(t, root)
+	})
 }
 
 func TestCompileCancellationBoundaries(t *testing.T) {
@@ -663,6 +718,17 @@ func TestCompileCancellationBoundaries(t *testing.T) {
 			configure: func(cancel context.CancelFunc, operations *compilerOperations) {
 				operations.openSource = func(string) (sourceDatabase, error) {
 					return &fakeSourceDatabase{records: testRecords(t), closeHook: cancel}, nil
+				}
+			},
+		},
+		{
+			name: "during profile projection",
+			configure: func(_ context.CancelFunc, operations *compilerOperations) {
+				operations.project = func(ctx context.Context, records []source.Record) (projectionStats, error) {
+					return projectRecords(&projectionCancelContext{
+						Context:   ctx,
+						remaining: 1,
+					}, records)
 				}
 			},
 		},
@@ -796,6 +862,9 @@ func TestCompileCancellationBoundaries(t *testing.T) {
 			}
 			if errors.Is(err, ErrNotEquivalent) {
 				t.Errorf("compile() cancellation error = %v, unexpectedly non-equivalence", err)
+			}
+			if errors.Is(err, ErrProfile) {
+				t.Errorf("compile() cancellation error = %v, unexpectedly profile failure", err)
 			}
 			assertNoGeneratedWorkspace(t, root)
 		})

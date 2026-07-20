@@ -19,6 +19,7 @@ const (
 	sourceOpenText           = "stategeodb: source database could not be opened\n"
 	sourceUnsupportedText    = "stategeodb: source database is unsupported\n"
 	sourceCorruptText        = "stategeodb: source database is corrupt\n"
+	profileFailureText       = "stategeodb: source records do not satisfy the artifact profile\n"
 	workspaceFailureText     = "stategeodb: candidate workspace failed\n"
 	writeFailureText         = "stategeodb: candidate write failed\n"
 	verifyFailureText        = "stategeodb: candidate verification failed\n"
@@ -174,6 +175,8 @@ func buildDiagnostic(err error) string {
 		return sourceUnsupportedText
 	case errors.Is(err, maxmind.ErrCorrupt):
 		return sourceCorruptText
+	case errors.Is(err, compiler.ErrProfile):
+		return profileFailureText
 	case errors.Is(err, mmdb.ErrInvalidInput),
 		errors.Is(err, mmdb.ErrBuild),
 		errors.Is(err, mmdb.ErrWrite):

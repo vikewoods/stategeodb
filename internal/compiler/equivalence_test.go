@@ -12,6 +12,7 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
@@ -51,11 +52,11 @@ func TestCompareRecordBehavior(t *testing.T) {
 		{
 			name: "source prefix split in output",
 			sourceRecords: []source.Record{
-				testRecord(t, "2001:db8::/32", "GB", "ENG", "source"),
+				testRecord(t, "2001:db8::/32", "GB", "", "source"),
 			},
 			outputRecords: []source.Record{
-				testRecord(t, "2001:db8::/33", "GB", "ENG", "output"),
-				testRecord(t, "2001:db8:8000::/33", "GB", "ENG", "output"),
+				testRecord(t, "2001:db8::/33", "GB", "", "output"),
+				testRecord(t, "2001:db8:8000::/33", "GB", "", "output"),
 			},
 			expectedStats: EquivalenceStats{SourceRecords: 1, OutputNetworks: 2, ComparedSegments: 2},
 		},
@@ -207,6 +208,19 @@ func TestCompareRecordBehaviorShuffledStreams(t *testing.T) {
 	}
 }
 
+func TestCompareRecordBehaviorRejectsUnprojectedInput(t *testing.T) {
+	record := testRecord(t, "2001:db8::/32", "GB", "ENG", "source")
+	stats, err := compareRecordBehavior(t.Context(), []source.Record{record}, []source.Record{record})
+	if stats != (EquivalenceStats{}) {
+		t.Errorf("compareRecordBehavior() stats = %+v, want zero", stats)
+	}
+	for _, target := range []error{ErrNotEquivalent, artifactprofile.ErrInvalidRecord} {
+		if !errors.Is(err, target) {
+			t.Errorf("compareRecordBehavior() error = %v, want errors.Is(%v)", err, target)
+		}
+	}
+}
+
 func TestFinalAddressBoundaries(t *testing.T) {
 	tests := []struct {
 		prefix   string
@@ -231,8 +245,8 @@ func TestReadCandidateRecords(t *testing.T) {
 	unknown := &fakeNetworkResult{prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	known := &fakeNetworkResult{
 		prefix:      netip.MustParsePrefix("2001:db8::/32"),
-		country:     stringPointerForCompiler("GB"),
-		subdivision: stringPointerForCompiler("ENG"),
+		country:     stringPointerForCompiler("US"),
+		subdivision: stringPointerForCompiler("CA"),
 	}
 	records, err := readCandidateRecords(
 		t.Context(),
@@ -244,7 +258,7 @@ func TestReadCandidateRecords(t *testing.T) {
 	}
 	expected := []source.Record{
 		testRecord(t, "198.51.100.0/24", "", "", "request-source"),
-		testRecord(t, "2001:db8::/32", "GB", "ENG", "request-source"),
+		testRecord(t, "2001:db8::/32", "US", "CA", "request-source"),
 	}
 	if !slices.Equal(records, expected) {
 		t.Errorf("readCandidateRecords() = %+v, want %+v", records, expected)
@@ -317,6 +331,15 @@ func TestReadCandidateRecordsClassifiesFailures(t *testing.T) {
 				country: stringPointerForCompiler("us"),
 			},
 			expectedCause: source.ErrInvalidCountry,
+		},
+		{
+			name: "non-US subdivision",
+			result: &fakeNetworkResult{
+				prefix:      netip.MustParsePrefix("2001:db8::/32"),
+				country:     stringPointerForCompiler("GB"),
+				subdivision: stringPointerForCompiler("ENG"),
+			},
+			expectedCause: artifactprofile.ErrInvalidRecord,
 		},
 		{
 			name: "invalid subdivision",

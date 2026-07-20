@@ -30,6 +30,9 @@ var (
 	ErrWorkspace = errors.New("compiler: workspace failure")
 	// ErrVerify classifies candidate open, structure, or metadata failures.
 	ErrVerify = errors.New("compiler: candidate verification failure")
+	// ErrProfile classifies failure to project normalized source records into
+	// the fixed compliance artifact profile.
+	ErrProfile = errors.New("compiler: artifact profile failure")
 	// ErrCleanup classifies failure to remove an owned generated workspace.
 	ErrCleanup           = errors.New("compiler: cleanup failure")
 	errCandidateIdentity = errors.New("compiler: candidate identity changed")
@@ -48,9 +51,10 @@ type Request struct {
 // workspace. On error, Compile returns no candidate and attempts to remove
 // every workspace it created.
 //
-// Cancellation is observed around upstream open, write, file synchronization,
-// verification, traversal, interval validation, and comparison. One active
-// upstream call or standard-library sort cannot be interrupted safely.
+// Cancellation is observed around upstream open, record projection, write,
+// file synchronization, verification, traversal, interval validation, and
+// comparison. One active upstream call or standard-library sort cannot be
+// interrupted safely.
 func Compile(ctx context.Context, request Request) (*Candidate, error) {
 	return compile(ctx, request, defaultOperations())
 }
@@ -87,6 +91,17 @@ func compile(
 	}
 	if closeErr != nil {
 		return nil, closeBeforeWorkspace(closeErr)
+	}
+	profileStats, err := operations.project(ctx, records)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, closeBeforeWorkspace(err)
+		}
+		return nil, closeBeforeWorkspace(classifiedWithCause(
+			"project source records",
+			ErrProfile,
+			err,
+		))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, closeBeforeWorkspace(err)
@@ -235,6 +250,7 @@ func compile(
 		size:             info.Size(),
 		buildEpoch:       request.BuildEpoch,
 		equivalenceStats: equivalenceStats,
+		profileStats:     profileStats,
 		rootPath:         rootPath,
 		rootInfo:         rootInfo,
 		candidateName:    candidateNameRelative,
@@ -361,6 +377,7 @@ type compilerOperations struct {
 	lstat            func(string) (os.FileInfo, error)
 	openRoot         func(string, os.FileInfo) (workspaceRoot, error)
 	openSource       func(string) (sourceDatabase, error)
+	project          func(context.Context, []source.Record) (projectionStats, error)
 	mkdirTemp        func(workspaceRoot, string) (string, error)
 	chmod            func(workspaceRoot, string, os.FileMode) error
 	rootLstat        func(workspaceRoot, string) (os.FileInfo, error)
@@ -378,6 +395,7 @@ func defaultOperations() compilerOperations {
 		lstat:      os.Lstat,
 		openRoot:   openWorkspaceRoot,
 		openSource: openSource,
+		project:    projectRecords,
 		mkdirTemp:  createWorkspace,
 		chmod: func(root workspaceRoot, name string, mode os.FileMode) error {
 			return root.Chmod(name, mode)

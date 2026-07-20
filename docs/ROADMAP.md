@@ -15,11 +15,17 @@ should remain a concise statement of product direction.
 ## Current baseline: local v1
 
 The implemented baseline compiles one locally acquired `GeoLite2-City` or
-`GeoIP2-City` MMDB into a deterministic minimal artifact, proves exact lookup
-equivalence, supports bounded inspection, and publishes a verified stable file
-at `dist/artifacts/stategeodb.mmdb` on local macOS or Linux. It does not acquire
+`GeoIP2-City` MMDB into a deterministic compliance artifact that retains
+country globally and first subdivision only for US records. It preserves
+unknown-location networks, proves exact projected lookup equivalence, supports
+bounded inspection, and publishes a verified stable file at
+`dist/artifacts/stategeodb.mmdb` on local macOS or Linux. It does not acquire
 sources, apply corrections, compare or merge providers, produce JSON reports,
 or deliver artifacts into Kubernetes.
+
+A generic all-country-subdivision artifact is not part of the current
+direction. Consider one only if a real consumer requires it, and give it a
+distinct artifact identity.
 
 ## Priority 1: reviewed custom corrections
 
@@ -33,6 +39,9 @@ owner, and optional expiry. The design must provide:
 - application after provider normalization;
 - correction provenance and counts in build evidence;
 - strict separation between geographic facts and allow/deny policy.
+
+For the current compliance profile, a correction may supply a subdivision only
+when the corrected country is `US`.
 
 Open design decisions include the file format and versioning rules, expiry
 semantics, whether provenance belongs inside the artifact or only in external

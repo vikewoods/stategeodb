@@ -24,6 +24,7 @@ type Candidate struct {
 	size             int64
 	buildEpoch       int64
 	equivalenceStats EquivalenceStats
+	profileStats     projectionStats
 	rootPath         string
 	rootInfo         os.FileInfo
 	candidateName    string

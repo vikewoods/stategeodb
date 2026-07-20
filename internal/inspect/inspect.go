@@ -13,6 +13,7 @@ import (
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
 	"github.com/vikewoods/stategeodb/internal/artifact"
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
@@ -266,19 +267,30 @@ func inspectLookup(result lookupResult, address netip.Addr) (Lookup, error) {
 	if subdivision != nil {
 		subdivisionValue = *subdivision
 	}
-	normalizedCountry, normalizedSubdivision, err := source.NormalizeLocation(
+	record, err := source.NewRecord(
+		prefix,
 		countryValue,
 		subdivisionValue,
+		"artifact-inspection",
 	)
 	if err != nil {
 		return Lookup{}, classified("validate lookup location", ErrLookup, err)
+	}
+	if record.Country != countryValue || record.Subdivision != subdivisionValue {
+		raw := record
+		raw.Country = countryValue
+		raw.Subdivision = subdivisionValue
+		return Lookup{}, classified("validate lookup location", ErrLookup, raw.Validate())
+	}
+	if err := artifactprofile.Validate(record); err != nil {
+		return Lookup{}, classified("validate lookup artifact profile", ErrLookup, err)
 	}
 	return Lookup{
 		Address:     address,
 		Found:       true,
 		Prefix:      prefix,
-		Country:     normalizedCountry,
-		Subdivision: normalizedSubdivision,
+		Country:     record.Country,
+		Subdivision: record.Subdivision,
 	}, nil
 }
 

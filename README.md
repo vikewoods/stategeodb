@@ -2,12 +2,19 @@
 
 `stategeodb` compiles one locally acquired MaxMind `GeoLite2-City` or
 `GeoIP2-City` MMDB into a deterministic project MMDB for
-`traefik-plugin-state-geo`. The output retains only:
+`traefik-plugin-state-geo`. The output uses a fixed compliance artifact
+profile: country is retained globally, while the first subdivision is retained
+only for US records.
 
 ```text
 country.iso_code
-subdivisions[0].iso_code
+subdivisions[0].iso_code (US records only)
 ```
+
+Non-US records are country-only even when the City source contains a
+subdivision. Unknown-location networks remain present as empty records. This
+projection contains geographic facts only; allow/deny policy remains in the
+Traefik middleware.
 
 Compilation is an offline build-time operation. Traefik continues to perform
 local MMDB lookups without a request-time network, SQL, document-database,
@@ -39,13 +46,16 @@ Publication creates no backup and does not delete the candidate.
 - Trusted operator-owned workspace and destination directories, with one
   publisher at a time per destination.
 
-The reported real-data measurements used a GeoLite dataset with approximately
-5.8 million normalized networks. Compilation used roughly 2.7 GiB peak resident
-memory on the tested Apple Silicon machine and Linux container. Allow at least
-approximately 4 GiB for operational headroom in the current full-build
-workflow; that recommendation is not a measured minimum. These figures are
-observations from specific data, machines, and measurement conditions, not
-stable guarantees. Memory optimization is deferred.
+The current compliance-profile measurement used 5,831,951 normalized GeoLite
+networks. The CLI build took 17.48 seconds and reached 2,791,964,672 bytes
+(approximately 2.60 GiB) peak resident memory on the tested Apple Silicon
+machine. It produced a 16,419,258-byte artifact with 2,736,008 tree nodes. For
+the same source snapshot, the preceding generic 24-bit artifact was 24,475,735
+bytes, so the compliance projection reduced it by 8,056,477 bytes (32.92%).
+Allow at least approximately 4 GiB for operational headroom in the current
+full-build workflow; that recommendation is not a measured minimum. These
+figures are observations from one source snapshot, machine, and measurement
+condition, not stable guarantees. Memory optimization is deferred.
 
 ## Data acquisition boundary
 
@@ -147,8 +157,9 @@ dist/bin/stategeodb inspect \
   --ip 2001:4860:4860::8888
 ```
 
-Inspection requires exact stategeodb schema-v1 metadata. It never performs a
-full data dump.
+Inspection requires exact stategeodb compliance schema-v1 metadata and rejects
+selected lookup records that violate the profile. It never performs a full data
+dump.
 
 ### Publish the stable local artifact
 
@@ -217,10 +228,12 @@ and publication is serialized per destination:
 - supported source metadata and MMDB structure are verified before ingestion;
 - the normalized model and compiler cover native IPv4 and IPv6, including
   canonical mapped-IPv4 handling;
-- output uses the fixed minimal schema;
+- output uses the fixed compliance profile: global country, US-only first
+  subdivision, and preserved unknown-location records;
 - identical logical input and a fixed build epoch produce byte-identical MMDB
   output;
-- complete interval-based source/output lookup equivalence is checked;
+- complete interval-based projected-source/output lookup equivalence is
+  checked;
 - a failed compile returns no candidate and attempts name-scoped cleanup inside
   the bound workspace root;
 - inspection output is bounded to metadata and at most 32 addresses;
@@ -251,6 +264,11 @@ output-write failure may leave a partial result.
 - High builder memory use.
 - Publication only on macOS and Linux.
 - Output schema fixed to project schema v1.
+
+Artifacts using the former `StateGeo-Country-Subdivision` identity are not
+compatible. Rebuild them from the licensed City source; inspection and
+publication intentionally reject them rather than applying a compatibility
+path.
 
 ## Development
 

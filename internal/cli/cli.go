@@ -23,15 +23,16 @@ Usage:
   stategeodb <command> -h
 
 Commands:
-  build     Compile one local City MMDB into a verified candidate artifact
+  build     Compile one local City MMDB into a verified compliance artifact
   compare   Report source coverage and disagreement without merging or publishing
   verify    Validate source or generated artifacts and configured quality gates
   inspect   Print bounded metadata and explicitly selected lookups
   publish   Publish an already built and verified candidate artifact
 
 The build, inspect, and publish commands are operational. Compare and verify remain unavailable.
+Generated artifacts retain country globally and first subdivision only for US records.
 `
-	buildHelp = `stategeodb build - compile one local City MMDB into a verified candidate artifact.
+	buildHelp = `stategeodb build - compile one local City MMDB into a verified candidate artifact for the fixed compliance profile.
 
 Usage:
   stategeodb help build
@@ -46,6 +47,8 @@ Required flags:
   --build-epoch <seconds>   Positive Unix timestamp encoded into the candidate
 
 Build writes and verifies a candidate but does not publish or replace a database.
+The candidate retains country globally and first subdivision only for US records;
+unknown-location records remain present.
 Use the separate publish command to publish an already verified candidate.
 `
 	compareHelp = `stategeodb compare - report source coverage and disagreement without merging or publishing.
@@ -84,8 +87,9 @@ Required flags:
 Optional flags:
   --ip <address>      Explicit IP lookup; repeat up to 32 times
 
-Inspect accepts only generated stategeodb artifacts. With no --ip flags it
-prints metadata only. It never prints or dumps the complete database.
+Inspect accepts only generated stategeodb compliance artifacts, whose records
+retain country globally and first subdivision only for US records. With no --ip
+flags it prints metadata only. It never prints or dumps the complete database.
 `
 	publishHelp = `stategeodb publish - publish an already built and verified candidate artifact.
 

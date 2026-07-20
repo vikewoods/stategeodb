@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/compiler"
 	"github.com/vikewoods/stategeodb/internal/inspect"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
@@ -159,6 +160,15 @@ func TestFormatInspectOutput_RejectsUnsupportedRecordSizes(t *testing.T) {
 	}
 }
 
+func TestFormatInspectOutput_RejectsNonUSSubdivision(t *testing.T) {
+	result := validInspectResultFixture()
+	result.Lookups[0].Country = "GB"
+	result.Lookups[0].Subdivision = "ENG"
+	if _, ok := formatInspectOutput(result); ok {
+		t.Error("formatInspectOutput() accepted a non-US subdivision")
+	}
+}
+
 func TestRunInspect_FailuresWriteNoStdout(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -172,6 +182,7 @@ func TestRunInspect_FailuresWriteNoStdout(t *testing.T) {
 		{name: "unsupported", err: inspect.ErrUnsupported, diagnostic: inspectUnsupportedText},
 		{name: "corrupt", err: inspect.ErrCorrupt, diagnostic: inspectCorruptText},
 		{name: "lookup", err: inspect.ErrLookup, diagnostic: inspectLookupText},
+		{name: "artifact profile", err: artifactprofile.ErrInvalidRecord, diagnostic: inspectLookupText},
 		{name: "normalization", err: source.ErrInvalidSubdivision, diagnostic: inspectLookupText},
 		{name: "close", err: inspect.ErrClose, diagnostic: inspectCloseText},
 		{name: "generic", err: errors.New("/private/path offset 42"), diagnostic: inspectFailureText},

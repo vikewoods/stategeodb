@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strconv"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/inspect"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
@@ -183,8 +184,17 @@ func validInspectResult(result inspect.Result) bool {
 		if !lookup.Address.IsValid() || lookup.Address != lookup.Address.Unmap() {
 			return false
 		}
-		country, subdivision, err := source.NormalizeLocation(lookup.Country, lookup.Subdivision)
-		if err != nil || country != lookup.Country || subdivision != lookup.Subdivision {
+		record := source.Record{
+			Prefix:      lookup.Prefix,
+			Country:     lookup.Country,
+			Subdivision: lookup.Subdivision,
+			SourceID:    "cli-inspection",
+		}
+		if lookup.Found {
+			if err := artifactprofile.Validate(record); err != nil {
+				return false
+			}
+		} else if lookup.Country != "" || lookup.Subdivision != "" {
 			return false
 		}
 		if !lookup.Found {
@@ -230,6 +240,7 @@ func inspectDiagnostic(err error) string {
 	case errors.Is(err, inspect.ErrCorrupt):
 		return inspectCorruptText
 	case errors.Is(err, inspect.ErrLookup),
+		errors.Is(err, artifactprofile.ErrInvalidRecord),
 		errors.Is(err, source.ErrInvalidPrefix),
 		errors.Is(err, source.ErrInvalidCountry),
 		errors.Is(err, source.ErrInvalidSubdivision):

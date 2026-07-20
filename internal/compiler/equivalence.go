@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"slices"
 
+	"github.com/vikewoods/stategeodb/internal/artifactprofile"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
 
@@ -96,6 +97,13 @@ func readCandidateRecords(
 				raw.Validate(),
 			)
 		}
+		if err := artifactprofile.Validate(record); err != nil {
+			return nil, classifiedWithCause(
+				"validate candidate artifact profile",
+				ErrNotEquivalent,
+				err,
+			)
+		}
 		records = append(records, record)
 	}
 
@@ -170,7 +178,7 @@ func makeIntervals(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if err := record.Validate(); err != nil {
+		if err := artifactprofile.Validate(record); err != nil {
 			return nil, classifiedWithCause(
 				"validate "+streamName+" interval",
 				ErrNotEquivalent,
