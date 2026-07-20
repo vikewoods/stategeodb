@@ -252,7 +252,7 @@ func TestBuildThenInspectIntegration(t *testing.T) {
 		}
 	}
 
-	for _, command := range []string{"compare", "verify", "publish"} {
+	for _, command := range []string{"compare", "verify"} {
 		var stdout bytes.Buffer
 		stderr.Reset()
 		status = runWithOperations(t.Context(), []string{command}, &stdout, &stderr, "ignored", defaultBuildOperations(), defaultInspectOperations())

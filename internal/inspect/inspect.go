@@ -12,6 +12,7 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifact"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 )
@@ -181,14 +182,18 @@ func validateRequest(ctx context.Context, request Request) (Request, error) {
 
 func inspectOpenDatabase(ctx context.Context, request Request, database database) (Result, error) {
 	metadata := database.Metadata()
-	if !supportedMetadata(metadata) {
-		return Result{}, classified("validate metadata", ErrUnsupported)
+	if !artifact.Compatible(metadata) {
+		return Result{}, classified(
+			"validate metadata",
+			ErrUnsupported,
+			artifact.ErrUnsupported,
+		)
 	}
 	if err := contextFailure(ctx, "verify database"); err != nil {
 		return Result{}, err
 	}
 	if err := database.Verify(); err != nil {
-		return Result{}, classified("verify database", ErrCorrupt)
+		return Result{}, classified("verify database", ErrCorrupt, artifact.ErrCorrupt)
 	}
 	if err := contextFailure(ctx, "verify database"); err != nil {
 		return Result{}, err
@@ -212,19 +217,6 @@ func inspectOpenDatabase(ctx context.Context, request Request, database database
 		result.Lookups = append(result.Lookups, lookup)
 	}
 	return result, nil
-}
-
-func supportedMetadata(metadata maxminddb.Metadata) bool {
-	return metadata.DatabaseType == mmdb.DatabaseType &&
-		len(metadata.Description) == 1 &&
-		metadata.Description["en"] == mmdb.SchemaDescription &&
-		len(metadata.Languages) == 0 &&
-		metadata.BuildEpoch > 0 &&
-		metadata.BinaryFormatMajorVersion == 2 &&
-		metadata.BinaryFormatMinorVersion == 0 &&
-		metadata.IPVersion == 6 &&
-		metadata.RecordSize == 28 &&
-		metadata.NodeCount > 0
 }
 
 func metadataResult(metadata maxminddb.Metadata) Metadata {

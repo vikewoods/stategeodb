@@ -29,7 +29,7 @@ Commands:
   inspect   Print bounded metadata and explicitly selected lookups
   publish   Publish an already built and verified candidate artifact
 
-The build and inspect commands are operational. Other domain commands remain unavailable.
+The build, inspect, and publish commands are operational. Compare and verify remain unavailable.
 `
 	buildHelp = `stategeodb build - compile one local City MMDB into a verified candidate artifact.
 
@@ -93,11 +93,16 @@ Usage:
   stategeodb help publish
   stategeodb publish --help
   stategeodb publish -h
+  stategeodb publish --candidate <path> --destination <path>
 
-Publish will publish an already built and verified candidate through the explicit publication boundary.
-It will not compile sources.
+Required flags:
+  --candidate <path>     Generated stategeodb candidate artifact
+  --destination <path>   Explicit local stable artifact path
 
-The publish operation is not implemented in this build.
+Publish reverifies the candidate snapshot. Identical destination bytes are left
+unchanged; different bytes are installed with an atomic sibling rename. No
+backup or rollback is created, and the candidate is never deleted. Only local
+macOS and Linux files are supported. Publish does not compile sources.
 `
 	unknownArgumentText = "stategeodb: invalid command usage; run 'stategeodb --help' for usage\n"
 	outputFailureText   = "stategeodb: failed to write output\n"
@@ -119,7 +124,7 @@ func Run(
 	stderr io.Writer,
 	version string,
 ) int {
-	return runWithOperations(
+	return runWithAllOperations(
 		ctx,
 		args,
 		stdout,
@@ -127,6 +132,7 @@ func Run(
 		version,
 		defaultBuildOperations(),
 		defaultInspectOperations(),
+		defaultPublishOperations(),
 	)
 }
 
@@ -157,6 +163,28 @@ func runWithOperations(
 	version string,
 	buildOperations buildOperations,
 	inspectOperations inspectOperations,
+) int {
+	return runWithAllOperations(
+		ctx,
+		args,
+		stdout,
+		stderr,
+		version,
+		buildOperations,
+		inspectOperations,
+		defaultPublishOperations(),
+	)
+}
+
+func runWithAllOperations(
+	ctx context.Context,
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	version string,
+	buildOperations buildOperations,
+	inspectOperations inspectOperations,
+	publishOperations publishOperations,
 ) int {
 	if len(args) == 0 {
 		return writeResult(stdout, stderr, helpText)
@@ -190,6 +218,8 @@ func runWithOperations(
 			return runBuild(ctx, args[1:], stdout, stderr, buildOperations)
 		case "inspect":
 			return runInspect(ctx, args[1:], stdout, stderr, inspectOperations)
+		case "publish":
+			return runPublish(ctx, args[1:], stdout, stderr, publishOperations)
 		}
 	}
 	if len(args) == 1 {
@@ -224,7 +254,7 @@ func findCommand(name string) (command, bool) {
 	case "inspect":
 		return command{name: name, help: inspectHelp, isOperational: true}, true
 	case "publish":
-		return command{name: name, help: publishHelp}, true
+		return command{name: name, help: publishHelp, isOperational: true}, true
 	default:
 		return command{}, false
 	}

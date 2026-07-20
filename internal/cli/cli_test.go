@@ -12,7 +12,7 @@ var testCommands = []command{
 	{name: "compare", help: compareHelp},
 	{name: "verify", help: verifyHelp},
 	{name: "inspect", help: inspectHelp, isOperational: true},
-	{name: "publish", help: publishHelp},
+	{name: "publish", help: publishHelp, isOperational: true},
 }
 
 func TestRun_RootHelpForms(t *testing.T) {
@@ -31,7 +31,7 @@ func TestRun_RootHelpForms(t *testing.T) {
 		"stategeodb -h",
 		"stategeodb help",
 		"stategeodb --version",
-		"The build and inspect commands are operational.",
+		"The build, inspect, and publish commands are operational.",
 	}
 	for _, content := range stableContent {
 		if !strings.Contains(expectedHelp, content) {
@@ -142,7 +142,7 @@ func TestRun_CommandHelpPreservesResponsibilityBoundaries(t *testing.T) {
 		},
 		{
 			name:     "publish",
-			contains: []string{"already built and verified candidate", "explicit publication boundary", "will not compile sources"},
+			contains: []string{"already built and verified candidate", "--candidate", "--destination", "reverifies", "unchanged", "atomic sibling rename", "backup or rollback", "never deleted", "macOS and Linux", "does not compile sources"},
 		},
 	}
 
@@ -228,8 +228,8 @@ func TestRun_RejectsInvalidUsage(t *testing.T) {
 		{name: "help target extra argument", args: []string{"help", "build", "extra"}},
 		{name: "command extra argument", args: []string{"compare", "extra"}},
 		{name: "command help extra argument", args: []string{"verify", "--help", "extra"}},
-		{name: "command short help extra argument", args: []string{"publish", "-h", "extra"}},
-		{name: "unsupported nested help", args: []string{"publish", "help"}},
+		{name: "command short help extra argument", args: []string{"compare", "-h", "extra"}},
+		{name: "unsupported nested help", args: []string{"verify", "help"}},
 		{name: "token-like value", args: []string{"--token=top-secret"}, sensitive: true},
 		{name: "authenticated url", args: []string{"https://user:secret@example.com/source"}, sensitive: true},
 		{name: "embedded newline", args: []string{"unknown\nforged diagnostic"}, sensitive: true},

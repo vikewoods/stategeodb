@@ -12,6 +12,7 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/vikewoods/stategeodb/internal/artifact"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 	"github.com/vikewoods/stategeodb/internal/source/maxmind"
@@ -544,16 +545,8 @@ func verifyCandidate(
 }
 
 func metadataMatches(metadata maxminddb.Metadata, buildEpoch int64) bool {
-	return metadata.DatabaseType == mmdb.DatabaseType &&
-		len(metadata.Description) == 1 &&
-		metadata.Description["en"] == mmdb.SchemaDescription &&
-		len(metadata.Languages) == 0 &&
-		uint64(metadata.BuildEpoch) == uint64(buildEpoch) &&
-		metadata.BinaryFormatMajorVersion == 2 &&
-		metadata.BinaryFormatMinorVersion == 0 &&
-		metadata.IPVersion == 6 &&
-		metadata.RecordSize == 28 &&
-		metadata.NodeCount > 0
+	return artifact.Compatible(metadata) &&
+		uint64(metadata.BuildEpoch) == uint64(buildEpoch)
 }
 
 func classified(operation string, class error) error {
