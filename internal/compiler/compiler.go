@@ -30,7 +30,8 @@ var (
 	// ErrVerify classifies candidate open, structure, or metadata failures.
 	ErrVerify = errors.New("compiler: candidate verification failure")
 	// ErrCleanup classifies failure to remove an owned generated workspace.
-	ErrCleanup = errors.New("compiler: cleanup failure")
+	ErrCleanup           = errors.New("compiler: cleanup failure")
+	errCandidateIdentity = errors.New("compiler: candidate identity changed")
 )
 
 // Request describes one deterministic compile invocation.
@@ -42,12 +43,13 @@ type Request struct {
 }
 
 // Compile ingests one verified City source and returns ownership of one fully
-// written and verified candidate workspace. On error, Compile returns no
-// candidate and attempts to remove every workspace it created.
+// written, structurally verified, and behaviorally equivalent candidate
+// workspace. On error, Compile returns no candidate and attempts to remove
+// every workspace it created.
 //
 // Cancellation is observed around upstream open, write, file synchronization,
-// and verification calls; those individual synchronous calls cannot be
-// interrupted safely.
+// verification, traversal, interval validation, and comparison. One active
+// upstream call or standard-library sort cannot be interrupted safely.
 func Compile(ctx context.Context, request Request) (*Candidate, error) {
 	return compile(ctx, request, defaultOperations())
 }
@@ -159,6 +161,22 @@ func compile(
 			classified("synchronize candidate file", ErrWorkspace),
 		))
 	}
+	writtenInfo, err := file.Stat()
+	if err != nil {
+		return fail(closeFileAfterFailure(
+			file,
+			classified("stat open candidate file", ErrWorkspace),
+		))
+	}
+	isExpectedOpenFile := writtenInfo.Mode().IsRegular() &&
+		writtenInfo.Mode().Perm() == 0o600 &&
+		writtenInfo.Size() == written
+	if !isExpectedOpenFile {
+		return fail(closeFileAfterFailure(
+			file,
+			classified("validate open candidate file", ErrWorkspace),
+		))
+	}
 	if err := file.Close(); err != nil {
 		return fail(classified("close candidate file", ErrWorkspace))
 	}
@@ -166,11 +184,23 @@ func compile(
 		return fail(err)
 	}
 
-	contents, err := operations.readFile(root, candidateNameRelative)
+	contents, err := operations.readFile(root, candidateNameRelative, writtenInfo)
 	if err != nil {
+		if errors.Is(err, errCandidateIdentity) {
+			return fail(classified("validate candidate identity", ErrNotEquivalent))
+		}
 		return fail(classified("open candidate database", ErrVerify))
 	}
-	if err := verifyCandidate(contents, request.BuildEpoch, operations.openVerification); err != nil {
+	equivalenceStats, err := verifyCandidate(
+		ctx,
+		contents,
+		request.BuildEpoch,
+		request.SourceID,
+		records,
+		operations.openVerification,
+		operations.compare,
+	)
+	if err != nil {
 		return fail(err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -181,7 +211,9 @@ func compile(
 	if err != nil {
 		return fail(classified("stat candidate file", ErrWorkspace))
 	}
-	isExpectedFile := info.Mode().IsRegular() && info.Mode().Perm() == 0o600
+	isExpectedFile := info.Mode().IsRegular() &&
+		info.Mode().Perm() == 0o600 &&
+		os.SameFile(writtenInfo, info)
 	if !isExpectedFile || info.Size() <= 0 || info.Size() != written {
 		return fail(classified("validate candidate file", ErrWorkspace))
 	}
@@ -201,6 +233,7 @@ func compile(
 		inputRecordCount: len(records),
 		size:             info.Size(),
 		buildEpoch:       request.BuildEpoch,
+		equivalenceStats: equivalenceStats,
 		rootPath:         rootPath,
 		rootInfo:         rootInfo,
 		candidateName:    candidateNameRelative,
@@ -302,12 +335,14 @@ type candidateFile interface {
 	io.Writer
 	Chmod(os.FileMode) error
 	Sync() error
+	Stat() (os.FileInfo, error)
 	Close() error
 }
 
 type verificationDatabase interface {
 	Verify() error
 	Metadata() maxminddb.Metadata
+	Networks() networkIterator
 	Close() error
 }
 
@@ -317,8 +352,8 @@ type workspaceRoot interface {
 	Lstat(string) (os.FileInfo, error)
 	Mkdir(string, os.FileMode) error
 	OpenFile(string, int, os.FileMode) (*os.File, error)
-	ReadFile(string) ([]byte, error)
 	RemoveAll(string) error
+	Rename(string, string) error
 }
 
 type compilerOperations struct {
@@ -330,8 +365,9 @@ type compilerOperations struct {
 	rootLstat        func(workspaceRoot, string) (os.FileInfo, error)
 	openFile         func(workspaceRoot, string, int, os.FileMode) (candidateFile, error)
 	write            func(io.Writer, []source.Record, mmdb.Options) (int64, error)
-	readFile         func(workspaceRoot, string) ([]byte, error)
+	readFile         func(workspaceRoot, string, os.FileInfo) ([]byte, error)
 	openVerification func([]byte) (verificationDatabase, error)
+	compare          func(context.Context, []source.Record, []source.Record) (EquivalenceStats, error)
 	removeAll        func(workspaceRoot, string) error
 	closeRoot        func(workspaceRoot) error
 }
@@ -351,10 +387,8 @@ func defaultOperations() compilerOperations {
 		openFile: func(root workspaceRoot, name string, flags int, mode os.FileMode) (candidateFile, error) {
 			return root.OpenFile(name, flags, mode)
 		},
-		write: mmdb.Write,
-		readFile: func(root workspaceRoot, name string) ([]byte, error) {
-			return root.ReadFile(name)
-		},
+		write:    mmdb.Write,
+		readFile: readOwnedCandidate,
 		openVerification: func(contents []byte) (verificationDatabase, error) {
 			reader, err := maxminddb.OpenBytes(contents)
 			if err != nil {
@@ -362,6 +396,7 @@ func defaultOperations() compilerOperations {
 			}
 			return &upstreamVerificationDatabase{reader: reader}, nil
 		},
+		compare: compareRecordBehavior,
 		removeAll: func(root workspaceRoot, name string) error {
 			return root.RemoveAll(name)
 		},
@@ -386,6 +421,41 @@ func openWorkspaceRoot(path string, expected os.FileInfo) (workspaceRoot, error)
 		return nil, errors.New("workspace root changed during validation")
 	}
 	return root, nil
+}
+
+func readOwnedCandidate(
+	root workspaceRoot,
+	name string,
+	expected os.FileInfo,
+) ([]byte, error) {
+	file, err := root.OpenFile(name, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	actual, statErr := file.Stat()
+	isExpectedFile := statErr == nil &&
+		actual.Mode().IsRegular() &&
+		actual.Mode().Perm() == 0o600 &&
+		actual.Size() == expected.Size() &&
+		os.SameFile(expected, actual)
+	if !isExpectedFile {
+		return nil, errors.Join(errCandidateIdentity, file.Close())
+	}
+
+	size := expected.Size()
+	if size < 0 || uint64(size) > uint64(^uint(0)>>1) {
+		return nil, errors.Join(errCandidateIdentity, file.Close())
+	}
+	contents := make([]byte, int(size))
+	_, readErr := io.ReadFull(file, contents)
+	closeErr := file.Close()
+	if errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return nil, errors.Join(errCandidateIdentity, closeErr)
+	}
+	if readErr != nil || closeErr != nil {
+		return nil, errors.Join(readErr, closeErr)
+	}
+	return contents, nil
 }
 
 func createWorkspace(root workspaceRoot, prefix string) (string, error) {
@@ -416,31 +486,61 @@ func (database *upstreamVerificationDatabase) Metadata() maxminddb.Metadata {
 	return database.reader.Metadata
 }
 
+func (database *upstreamVerificationDatabase) Networks() networkIterator {
+	return func(yield func(networkResult) bool) {
+		for result := range database.reader.Networks() {
+			if !yield(result) {
+				return
+			}
+		}
+	}
+}
+
 func (database *upstreamVerificationDatabase) Close() error {
 	return database.reader.Close()
 }
 
 func verifyCandidate(
+	ctx context.Context,
 	contents []byte,
 	buildEpoch int64,
+	sourceID string,
+	sourceRecords []source.Record,
 	open func([]byte) (verificationDatabase, error),
-) error {
+	compare func(context.Context, []source.Record, []source.Record) (EquivalenceStats, error),
+) (EquivalenceStats, error) {
+	if err := ctx.Err(); err != nil {
+		return EquivalenceStats{}, err
+	}
 	database, err := open(contents)
 	if err != nil {
-		return classified("open candidate database", ErrVerify)
+		return EquivalenceStats{}, classified("open candidate database", ErrVerify)
 	}
 
 	var primary error
-	if err := database.Verify(); err != nil {
+	var stats EquivalenceStats
+	if err := ctx.Err(); err != nil {
+		primary = err
+	} else if err := database.Verify(); err != nil {
 		primary = classified("verify candidate structure", ErrVerify)
 	} else if !metadataMatches(database.Metadata(), buildEpoch) {
 		primary = classified("verify candidate metadata", ErrVerify)
+	} else if outputRecords, err := readCandidateRecords(ctx, database.Networks(), sourceID); err != nil {
+		primary = err
+	} else {
+		stats, primary = compare(ctx, sourceRecords, outputRecords)
+	}
+	if primary == nil {
+		primary = ctx.Err()
 	}
 	if err := database.Close(); err != nil {
 		closeErr := classified("close candidate verifier", ErrVerify)
 		primary = errors.Join(primary, closeErr)
 	}
-	return primary
+	if primary != nil {
+		return EquivalenceStats{}, primary
+	}
+	return stats, nil
 }
 
 func metadataMatches(metadata maxminddb.Metadata, buildEpoch int64) bool {

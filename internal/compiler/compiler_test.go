@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -15,7 +14,6 @@ import (
 
 	maxminddb "github.com/oschwald/maxminddb-golang/v2"
 
-	"github.com/vikewoods/stategeodb/internal/cli"
 	"github.com/vikewoods/stategeodb/internal/mmdb"
 	"github.com/vikewoods/stategeodb/internal/source"
 	"github.com/vikewoods/stategeodb/internal/source/maxmind"
@@ -98,6 +96,20 @@ func TestCompile(t *testing.T) {
 	if candidate.BuildEpoch() != request.BuildEpoch {
 		t.Errorf("BuildEpoch() = %d, want %d", candidate.BuildEpoch(), request.BuildEpoch)
 	}
+	stats := candidate.EquivalenceStats()
+	if stats.SourceRecords != candidate.InputRecordCount() {
+		t.Errorf(
+			"EquivalenceStats().SourceRecords = %d, want InputRecordCount() %d",
+			stats.SourceRecords,
+			candidate.InputRecordCount(),
+		)
+	}
+	if stats.OutputNetworks <= 0 || stats.ComparedSegments <= 0 {
+		t.Errorf("EquivalenceStats() = %+v, want positive output and segment counts", stats)
+	}
+	if stats.ComparedSegments < stats.SourceRecords || stats.ComparedSegments < stats.OutputNetworks {
+		t.Errorf("EquivalenceStats() = %+v, compared segments do not cover both streams", stats)
+	}
 
 	// A rename round trip proves Compile returned without retaining an open file
 	// or verification-reader handle on platforms that forbid renaming open files.
@@ -137,23 +149,170 @@ func TestCompile(t *testing.T) {
 	assertFileContents(t, filepath.Join(sibling, "keep"), "sibling")
 }
 
-func TestCompileLeavesCLICommandsUnavailable(t *testing.T) {
-	for _, command := range []string{"build", "compare", "verify", "inspect", "publish"} {
-		t.Run(command, func(t *testing.T) {
-			var stdout bytes.Buffer
-			var stderr bytes.Buffer
-			status := cli.Run(t.Context(), []string{command}, &stdout, &stderr, "test")
-			if status != 1 {
-				t.Errorf("Run(%q) status = %d, want 1", command, status)
+func TestCompileAcceptsCompactedEquivalentCandidate(t *testing.T) {
+	root := t.TempDir()
+	records := []source.Record{
+		mustRecord(t, "192.0.2.0/25", "US", "CA"),
+		mustRecord(t, "192.0.2.128/25", "US", "CA"),
+	}
+	operations := defaultOperations()
+	operations.openSource = func(string) (sourceDatabase, error) {
+		return &fakeSourceDatabase{records: records}, nil
+	}
+	candidate, err := compile(t.Context(), fixtureRequest(root), operations)
+	if err != nil {
+		t.Fatalf("compile() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := candidate.Cleanup(); err != nil {
+			t.Errorf("Cleanup() error = %v", err)
+		}
+	})
+
+	stats := candidate.EquivalenceStats()
+	if stats.SourceRecords != 2 || stats.OutputNetworks != 1 || stats.ComparedSegments != 2 {
+		t.Errorf("EquivalenceStats() = %+v, want 2 source, 1 output, 2 segments", stats)
+	}
+}
+
+func TestCompileRejectsNonEquivalentCandidate(t *testing.T) {
+	tests := []struct {
+		name   string
+		output func(*testing.T) []source.Record
+	}{
+		{
+			name: "location mismatch",
+			output: func(t *testing.T) []source.Record {
+				records := testRecords(t)
+				records[0].Country = "GB"
+				records[0].Subdivision = "ENG"
+				return records
+			},
+		},
+		{
+			name: "missing output network",
+			output: func(t *testing.T) []source.Record {
+				return testRecords(t)[1:]
+			},
+		},
+		{
+			name: "unexpected output network",
+			output: func(t *testing.T) []source.Record {
+				return append(
+					testRecords(t),
+					mustRecord(t, "203.0.113.0/24", "US", "NY"),
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			operations := operationsWithRecords(t)
+			output := test.output(t)
+			operations.write = func(
+				destination io.Writer,
+				_ []source.Record,
+				options mmdb.Options,
+			) (int64, error) {
+				return mmdb.Write(destination, output, options)
 			}
-			if stdout.Len() != 0 {
-				t.Errorf("Run(%q) stdout = %q, want empty", command, stdout.String())
+
+			candidate, err := compile(t.Context(), fixtureRequest(root), operations)
+			if candidate != nil {
+				t.Error("compile() returned a candidate")
 			}
-			if !strings.Contains(stderr.String(), command+" is not implemented") {
-				t.Errorf("Run(%q) stderr = %q, want unavailable diagnostic", command, stderr.String())
+			if !errors.Is(err, ErrNotEquivalent) {
+				t.Fatalf("compile() error = %v, want errors.Is(ErrNotEquivalent)", err)
 			}
+			assertNoGeneratedWorkspace(t, root)
 		})
 	}
+}
+
+func TestCompileJoinsEquivalenceAndCleanupFailures(t *testing.T) {
+	root := t.TempDir()
+	var workspacePath string
+	operations := operationsWithRecords(t)
+	output := testRecords(t)[1:]
+	operations.write = func(
+		destination io.Writer,
+		_ []source.Record,
+		options mmdb.Options,
+	) (int64, error) {
+		return mmdb.Write(destination, output, options)
+	}
+	originalMkdirTemp := operations.mkdirTemp
+	operations.mkdirTemp = func(workspaceRoot workspaceRoot, pattern string) (string, error) {
+		workspace, err := originalMkdirTemp(workspaceRoot, pattern)
+		workspacePath = filepath.Join(root, workspace)
+		return workspace, err
+	}
+	operations.removeAll = func(workspaceRoot, string) error {
+		return errors.New("unsafe cleanup detail")
+	}
+
+	candidate, err := compile(t.Context(), fixtureRequest(root), operations)
+	if candidate != nil {
+		t.Error("compile() returned a candidate")
+	}
+	for _, target := range []error{ErrNotEquivalent, ErrCleanup} {
+		if !errors.Is(err, target) {
+			t.Errorf("compile() error = %v, want errors.Is(%v)", err, target)
+		}
+	}
+	if strings.Contains(err.Error(), "unsafe cleanup detail") {
+		t.Errorf("compile() error exposed unsafe detail: %v", err)
+	}
+	if workspacePath == "" {
+		t.Fatal("workspace was not created")
+	}
+	if err := os.RemoveAll(workspacePath); err != nil {
+		t.Fatalf("RemoveAll(test cleanup) error = %v", err)
+	}
+}
+
+func TestCompileDetectsCandidateReplacementBeforeVerification(t *testing.T) {
+	root := t.TempDir()
+	operations := operationsWithRecords(t)
+	originalRead := operations.readFile
+	operations.readFile = func(
+		workspaceRoot workspaceRoot,
+		name string,
+		expected os.FileInfo,
+	) ([]byte, error) {
+		if err := workspaceRoot.Rename(name, name+".verified"); err != nil {
+			t.Fatalf("Rename(candidate) error = %v", err)
+		}
+		replacement, err := workspaceRoot.OpenFile(
+			name,
+			os.O_WRONLY|os.O_CREATE|os.O_EXCL,
+			0o600,
+		)
+		if err != nil {
+			t.Fatalf("OpenFile(replacement) error = %v", err)
+		}
+		if _, err := replacement.Write([]byte("unverified replacement")); err != nil {
+			t.Fatalf("Write(replacement) error = %v", err)
+		}
+		if err := replacement.Close(); err != nil {
+			t.Fatalf("Close(replacement) error = %v", err)
+		}
+		return originalRead(workspaceRoot, name, expected)
+	}
+
+	candidate, err := compile(t.Context(), fixtureRequest(root), operations)
+	if candidate != nil {
+		t.Error("compile() returned a candidate")
+	}
+	if !errors.Is(err, ErrNotEquivalent) {
+		t.Fatalf("compile() error = %v, want errors.Is(ErrNotEquivalent)", err)
+	}
+	if strings.Contains(err.Error(), root) || strings.Contains(err.Error(), "replacement") {
+		t.Errorf("compile() error exposed unsafe detail: %v", err)
+	}
+	assertNoGeneratedWorkspace(t, root)
 }
 
 func TestCompileValidatesRequestBeforeOpeningSource(t *testing.T) {
@@ -538,7 +697,28 @@ func TestCompileCancellationBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name: "after verification",
+			name: "after candidate read before verification",
+			configure: func(cancel context.CancelFunc, operations *compilerOperations) {
+				original := operations.readFile
+				operations.readFile = func(
+					root workspaceRoot,
+					name string,
+					expected os.FileInfo,
+				) ([]byte, error) {
+					contents, err := original(root, name, expected)
+					if err == nil {
+						cancel()
+					}
+					return contents, err
+				}
+				operations.openVerification = func([]byte) (verificationDatabase, error) {
+					t.Fatal("openVerification called after cancellation")
+					return nil, nil
+				}
+			},
+		},
+		{
+			name: "before equivalence traversal",
 			configure: func(cancel context.CancelFunc, operations *compilerOperations) {
 				original := operations.openVerification
 				operations.openVerification = func(contents []byte) (verificationDatabase, error) {
@@ -550,6 +730,53 @@ func TestCompileCancellationBoundaries(t *testing.T) {
 						verificationDatabase: database,
 						cancel:               cancel,
 					}, nil
+				}
+			},
+		},
+		{
+			name: "during output traversal",
+			configure: func(cancel context.CancelFunc, operations *compilerOperations) {
+				operations.openVerification = func([]byte) (verificationDatabase, error) {
+					return &fakeVerificationDatabase{
+						metadata:    expectedMetadata(testBuildEpoch),
+						networks:    fakeResultsForRecords(testRecords(t)),
+						networkHook: func(int) { cancel() },
+					}, nil
+				}
+			},
+		},
+		{
+			name: "during interval comparison",
+			configure: func(_ context.CancelFunc, operations *compilerOperations) {
+				original := operations.compare
+				operations.compare = func(
+					ctx context.Context,
+					sourceRecords []source.Record,
+					outputRecords []source.Record,
+				) (EquivalenceStats, error) {
+					cancelingContext := &cancelAfterErrChecksContext{
+						Context:   ctx,
+						remaining: 15,
+						err:       context.Canceled,
+					}
+					return original(cancelingContext, sourceRecords, outputRecords)
+				}
+			},
+		},
+		{
+			name: "after successful interval comparison",
+			configure: func(cancel context.CancelFunc, operations *compilerOperations) {
+				original := operations.compare
+				operations.compare = func(
+					ctx context.Context,
+					sourceRecords []source.Record,
+					outputRecords []source.Record,
+				) (EquivalenceStats, error) {
+					stats, err := original(ctx, sourceRecords, outputRecords)
+					if err == nil {
+						cancel()
+					}
+					return stats, err
 				}
 			},
 		},
@@ -566,6 +793,9 @@ func TestCompileCancellationBoundaries(t *testing.T) {
 			}
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("compile() error = %v, want errors.Is(context.Canceled)", err)
+			}
+			if errors.Is(err, ErrNotEquivalent) {
+				t.Errorf("compile() cancellation error = %v, unexpectedly non-equivalence", err)
 			}
 			assertNoGeneratedWorkspace(t, root)
 		})
@@ -659,6 +889,7 @@ func TestCompileCleansWorkspaceOnFailures(t *testing.T) {
 					errors.New("unsafe file chmod failure"),
 					nil,
 					nil,
+					nil,
 				)
 			},
 		},
@@ -684,14 +915,26 @@ func TestCompileCleansWorkspaceOnFailures(t *testing.T) {
 			name:          "file synchronization",
 			expectedCause: ErrWorkspace,
 			configure: func(operations *compilerOperations) {
-				operations.openFile = faultingOpenFile(nil, errors.New("unsafe sync failure"), nil)
+				operations.openFile = faultingOpenFile(nil, errors.New("unsafe sync failure"), nil, nil)
+			},
+		},
+		{
+			name:          "open candidate stat",
+			expectedCause: ErrWorkspace,
+			configure: func(operations *compilerOperations) {
+				operations.openFile = faultingOpenFile(
+					nil,
+					nil,
+					nil,
+					errors.New("unsafe open file stat failure"),
+				)
 			},
 		},
 		{
 			name:          "file close",
 			expectedCause: ErrWorkspace,
 			configure: func(operations *compilerOperations) {
-				operations.openFile = faultingOpenFile(nil, nil, errors.New("unsafe close failure"))
+				operations.openFile = faultingOpenFile(nil, nil, errors.New("unsafe close failure"), nil)
 			},
 		},
 		{
@@ -707,7 +950,7 @@ func TestCompileCleansWorkspaceOnFailures(t *testing.T) {
 			name:          "candidate verification read",
 			expectedCause: ErrVerify,
 			configure: func(operations *compilerOperations) {
-				operations.readFile = func(workspaceRoot, string) ([]byte, error) {
+				operations.readFile = func(workspaceRoot, string, os.FileInfo) ([]byte, error) {
 					return nil, errors.New("unsafe candidate read detail")
 				}
 			},
@@ -739,6 +982,7 @@ func TestCompileCleansWorkspaceOnFailures(t *testing.T) {
 				operations.openVerification = func([]byte) (verificationDatabase, error) {
 					return &fakeVerificationDatabase{
 						metadata: expectedMetadata(testBuildEpoch),
+						networks: fakeResultsForRecords(testRecords(t)),
 						closeErr: errors.New("unsafe verifier close detail"),
 					}, nil
 				}
@@ -916,12 +1160,30 @@ func TestCandidateCleanupPreservesSiblingCandidate(t *testing.T) {
 func TestCandidateNilReceiver(t *testing.T) {
 	var candidate *Candidate
 	if candidate.Path() != "" || candidate.InputRecordCount() != 0 ||
-		candidate.Size() != 0 || candidate.BuildEpoch() != 0 {
+		candidate.Size() != 0 || candidate.BuildEpoch() != 0 ||
+		candidate.EquivalenceStats() != (EquivalenceStats{}) {
 		t.Error("nil Candidate accessors did not return zero values")
 	}
 	if err := candidate.Cleanup(); err != nil {
 		t.Errorf("nil Cleanup() error = %v", err)
 	}
+}
+
+func fakeResultsForRecords(records []source.Record) []networkResult {
+	results := make([]networkResult, 0, len(records))
+	for _, record := range records {
+		result := &fakeNetworkResult{prefix: record.Prefix}
+		if record.Country != "" {
+			country := record.Country
+			result.country = &country
+		}
+		if record.Subdivision != "" {
+			subdivision := record.Subdivision
+			result.subdivision = &subdivision
+		}
+		results = append(results, result)
+	}
+	return results
 }
 
 func operationsWithRecords(t *testing.T) compilerOperations {
@@ -1107,6 +1369,7 @@ type faultFile struct {
 	chmodErr error
 	syncErr  error
 	closeErr error
+	statErr  error
 }
 
 func (file *faultFile) Chmod(mode os.FileMode) error {
@@ -1123,6 +1386,13 @@ func (file *faultFile) Sync() error {
 	return file.File.Sync()
 }
 
+func (file *faultFile) Stat() (os.FileInfo, error) {
+	if file.statErr != nil {
+		return nil, file.statErr
+	}
+	return file.File.Stat()
+}
+
 func (file *faultFile) Close() error {
 	return errors.Join(file.File.Close(), file.closeErr)
 }
@@ -1131,6 +1401,7 @@ func faultingOpenFile(
 	chmodErr error,
 	syncErr error,
 	closeErr error,
+	statErr error,
 ) func(workspaceRoot, string, int, os.FileMode) (candidateFile, error) {
 	return func(root workspaceRoot, path string, flags int, mode os.FileMode) (candidateFile, error) {
 		file, err := root.OpenFile(path, flags, mode)
@@ -1142,14 +1413,18 @@ func faultingOpenFile(
 			chmodErr: chmodErr,
 			syncErr:  syncErr,
 			closeErr: closeErr,
+			statErr:  statErr,
 		}, nil
 	}
 }
 
 type fakeVerificationDatabase struct {
-	metadata  maxminddb.Metadata
-	verifyErr error
-	closeErr  error
+	metadata    maxminddb.Metadata
+	verifyErr   error
+	closeErr    error
+	networks    []networkResult
+	networkHook func(int)
+	closeCalls  *int
 }
 
 func (database *fakeVerificationDatabase) Verify() error {
@@ -1160,7 +1435,23 @@ func (database *fakeVerificationDatabase) Metadata() maxminddb.Metadata {
 	return database.metadata
 }
 
+func (database *fakeVerificationDatabase) Networks() networkIterator {
+	return func(yield func(networkResult) bool) {
+		for index, result := range database.networks {
+			if !yield(result) {
+				return
+			}
+			if database.networkHook != nil {
+				database.networkHook(index)
+			}
+		}
+	}
+}
+
 func (database *fakeVerificationDatabase) Close() error {
+	if database.closeCalls != nil {
+		(*database.closeCalls)++
+	}
 	return database.closeErr
 }
 
@@ -1179,6 +1470,10 @@ func (database *cancelingVerificationDatabase) Verify() error {
 
 func (database *cancelingVerificationDatabase) Metadata() maxminddb.Metadata {
 	return database.verificationDatabase.Metadata()
+}
+
+func (database *cancelingVerificationDatabase) Networks() networkIterator {
+	return database.verificationDatabase.Networks()
 }
 
 func (database *cancelingVerificationDatabase) Close() error {

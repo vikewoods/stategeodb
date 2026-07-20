@@ -5,6 +5,15 @@ import (
 	"os"
 )
 
+// EquivalenceStats is bounded evidence from an exact source/candidate
+// behavioral comparison. Network counts may differ when behavior is split or
+// compacted across different prefix shapes.
+type EquivalenceStats struct {
+	SourceRecords    int
+	OutputNetworks   int
+	ComparedSegments int
+}
+
 // Candidate owns one verified generated workspace and its candidate MMDB.
 // Candidate values must remain pointer-owned. Cleanup and other methods are
 // safe for sequential use; concurrent mutation is not supported.
@@ -14,6 +23,7 @@ type Candidate struct {
 	inputRecordCount int
 	size             int64
 	buildEpoch       int64
+	equivalenceStats EquivalenceStats
 	rootPath         string
 	rootInfo         os.FileInfo
 	candidateName    string
@@ -71,6 +81,14 @@ func (candidate *Candidate) BuildEpoch() int64 {
 		return 0
 	}
 	return candidate.buildEpoch
+}
+
+// EquivalenceStats returns a copy of the successful exact-comparison evidence.
+func (candidate *Candidate) EquivalenceStats() EquivalenceStats {
+	if candidate == nil {
+		return EquivalenceStats{}
+	}
+	return candidate.equivalenceStats
 }
 
 // Cleanup removes only the generated workspace owned by candidate. Repeated
